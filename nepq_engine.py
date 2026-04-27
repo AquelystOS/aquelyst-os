@@ -17,6 +17,7 @@ This module powers:
 
 import json
 import re
+import time
 import requests
 from datetime import datetime
 
@@ -264,45 +265,76 @@ You have access to context about the prospect (business name, contact, score, pa
 # Provider helpers
 # ============================================================================
 def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
-    """Call Cerebras with a message list. Returns (text, error)."""
+    """Call Cerebras with retries + model rotation when rate-limited.
+    Returns (text, error)."""
     api_key = api_keys.get_key('cerebras')
     if not api_key:
         return None, "No Cerebras key"
 
-    # Pick best model
+    # Discover available models
+    available = []
     try:
         mr = requests.get(f"{CEREBRAS_BASE_URL}/models",
                           headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
         if mr.status_code == 200:
             available = [m['id'] for m in mr.json().get('data', [])]
-            preferences = ['qwen-3-235b-a22b-instruct-2507', 'gpt-oss-120b',
-                            'zai-glm-4.7', 'llama-3.3-70b', 'llama3.1-8b']
-            model = next((m for m in preferences if m in available), available[0])
-        else:
-            model = 'llama3.1-8b'
     except Exception:
-        model = 'llama3.1-8b'
+        pass
 
-    try:
-        r = requests.post(
-            f"{CEREBRAS_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-            timeout=45
-        )
-        if r.status_code == 200:
-            return r.json()['choices'][0]['message']['content'], None
-        return None, f"Cerebras {r.status_code}: {r.text[:150]}"
-    except Exception as e:
-        return None, f"Cerebras error: {str(e)[:100]}"
+    preferences = [
+        'qwen-3-235b-a22b-instruct-2507',
+        'gpt-oss-120b',
+        'zai-glm-4.7',
+        'llama-3.3-70b',
+        'llama3.3-70b',
+        'qwen-3-32b',
+        'llama3.1-8b',
+    ]
+    if available:
+        models_to_try = [m for m in preferences if m in available] or [available[0]]
+    else:
+        models_to_try = ['llama3.1-8b']
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    last_err = ""
+
+    # Up to 3 attempts: try each model in turn; if all are rate-limited, sleep and retry
+    for attempt in range(3):
+        for model in models_to_try:
+            try:
+                r = requests.post(
+                    f"{CEREBRAS_BASE_URL}/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                    timeout=45,
+                )
+                if r.status_code == 200:
+                    return r.json()['choices'][0]['message']['content'], None
+                last_err = f"Cerebras {r.status_code} on {model}: {r.text[:120]}"
+                # 429/503 → next model is worth trying right away
+                if r.status_code in (429, 503):
+                    continue
+                # 401/403/other → don't keep cycling models, key/auth issue
+                break
+            except requests.Timeout:
+                last_err = f"Cerebras timeout on {model}"
+                continue
+            except Exception as e:
+                last_err = f"Cerebras error on {model}: {str(e)[:100]}"
+                continue
+        # Rotated through every model and still failing — short backoff and retry
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+
+    return None, last_err
 
 
 def _claude_chat(messages, max_tokens=1024, system_prompt=None):
@@ -528,21 +560,18 @@ def _template_fallback(messages):
         their_role = ''
 
     if is_chat:
-        # Live conversation with Aqua. Be Aqua. Acknowledge the human. Don't auto-reply.
         greeting = f"Hey {their_first}" if their_first else "Hey"
         if not lower or lower in ('hi', 'hello', 'hey', 'yo', 'sup'):
             return (
-                f"{greeting} — Aqua here. Aqua is the AqueLyst team's AI sales coach. "
-                f"What do you want to dig into? I can brainstorm new lead angles, "
-                f"roleplay an objection, review a draft, or just talk shop about a deal "
-                f"that's stuck. (FYI: my AI brain is offline right now so I'm running on a "
-                f"limited fallback — your real answer will be way better once Cerebras "
-                f"reconnects.)"
+                f"{greeting}. Aqua here — AqueLyst's salesperson, ready to work. "
+                f"My AI brain is throttled at the moment (Cerebras is rate-limiting the team), "
+                f"so I'm running on a limited fallback. Wait ~30s and hit me again — "
+                f"I'll be back at full speed."
             )
         return (
-            f"{greeting} — got your message. My AI brain is offline at the moment so I "
-            f"can't give a thoughtful reply yet. Try again in a few seconds, or check "
-            f"Setup → API Keys to confirm Cerebras / Claude is connected.\n\n— Aqua"
+            f"{greeting} — got it. Cerebras is rate-limiting me right now (free tier "
+            f"hitting capacity). Wait 30 seconds and try again, or hook up an Anthropic "
+            f"Claude key in Setup → API Keys for unlimited backup."
         )
 
     if is_teammate_email:
