@@ -717,15 +717,26 @@ def _admin_keys_section():
     st.markdown("---")
 
     # ============================================================
-    # SHARED BASELINE KEYS — every provider with link + tier
+    # SHARED BASELINE KEYS — every provider with link, tier, live status
     # ============================================================
     st.markdown("##### 🌐 Shared baseline keys (team-wide fallback)")
     st.caption("Aqua tries providers in order — FREE tier first, PAID tier as backup. "
                 "Adding multiple lets her keep working even if one's throttled.")
 
+    # Persistence warning — Streamlit Cloud's filesystem is ephemeral
+    import cloud_mode as _cm
+    if _cm.is_cloud():
+        st.warning(
+            "⚠️ **Important — Streamlit Cloud has an ephemeral filesystem.** "
+            "Keys saved here work for this container's lifetime, but get **wiped on each redeploy**. "
+            "Scroll to the bottom for the **TOML snippet** you must paste into Streamlit Cloud → Settings → Secrets "
+            "to make them permanent across restarts."
+        )
+
     for prov_meta in api_keys.PROVIDER_CATALOG:
         pid = prov_meta['id']
         k = api_keys.get_key(pid)
+        log = database.provider_log_get(pid) or {}
         with st.container(border=True):
             top = st.columns([3, 1, 2])
             top[0].markdown(f"**{prov_meta['name']}**")
@@ -743,13 +754,41 @@ def _admin_keys_section():
             )
             st.caption(prov_meta['note'])
 
-            row = st.columns([5, 1])
+            # Provider-specific guidance
+            if pid == 'groq':
+                st.info(
+                    "**Groq ToS note:** Free tier is intended for individual development use. "
+                    "**Don't pool one Groq key across multiple humans.** Best practice: "
+                    "each team member adds their OWN Groq key via Setup → AI (personal keys). "
+                    "A single shared baseline key here is fine for admin/testing only."
+                )
+
+            # Live connection status
+            status_line = ""
+            if k and log.get('last_ok_at'):
+                status_line = f"✅ Last verified working · {log['last_ok_at'][:16]}"
+            elif k and log.get('last_err_at'):
+                status_line = f"⚠️ Last test failed at {log['last_err_at'][:16]} — `{(log.get('last_err') or '')[:80]}`"
+            elif k:
+                status_line = "🟡 Saved but never tested — click 'Test now' below"
+
+            row = st.columns([3, 1, 1, 1])
             if k:
                 masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
-                row[0].markdown(f"✅ Connected · `{masked}`")
-                if row[1].button("🗑", key=f"adm_baseline_rm_{pid}"):
+                row[0].markdown(f"`{masked}`")
+                if row[1].button("🧪 Test", key=f"adm_baseline_test_{pid}"):
+                    with st.spinner(f"Testing {prov_meta['name']}..."):
+                        ok, msg, model = api_keys.test_provider_connection(pid)
+                        if ok:
+                            st.success(f"✅ {prov_meta['name']} working (model: `{model}`)")
+                        else:
+                            st.error(f"❌ {prov_meta['name']} failed: {msg}")
+                    st.rerun()
+                if row[2].button("🗑", key=f"adm_baseline_rm_{pid}"):
                     api_keys.delete_key(pid)
                     st.rerun()
+                if status_line:
+                    st.caption(status_line)
             else:
                 with row[0].popover("➕ Add key", use_container_width=True):
                     placeholder = (prov_meta['key_prefix'] + '...') if prov_meta['key_prefix'] else 'paste key'
@@ -757,12 +796,65 @@ def _admin_keys_section():
                                            type="password",
                                            placeholder=placeholder,
                                            key=f"adm_baseline_input_{pid}")
-                    if st.button("Save", key=f"adm_baseline_save_{pid}",
+                    if st.button("Save & test", key=f"adm_baseline_save_{pid}",
                                   type="primary", use_container_width=True):
                         if new_k.strip():
-                            api_keys.set_key(pid, new_k.strip())
-                            st.success(f"✅ Saved {prov_meta['name']} key")
-                            st.rerun()
+                            with st.spinner(f"Saving + testing {prov_meta['name']}..."):
+                                # Test FIRST, only save if it works
+                                ok, msg, model = api_keys.test_provider_connection(
+                                    pid, override_key=new_k.strip()
+                                )
+                                if ok:
+                                    api_keys.set_key(pid, new_k.strip())
+                                    st.success(
+                                        f"✅ {prov_meta['name']} key saved + verified "
+                                        f"(model: `{model}`)"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        f"❌ Key didn't work — NOT saved. "
+                                        f"Reason: {msg}"
+                                    )
+
+    # ============================================================
+    # PERMANENT-PERSISTENCE HELPER (Streamlit Cloud ephemeral fix)
+    # ============================================================
+    st.markdown("---")
+    with st.expander("🔐 Make these keys permanent across Streamlit Cloud restarts"):
+        st.markdown(
+            "Streamlit Cloud wipes the local filesystem on every redeploy / sleep cycle. "
+            "To make your saved keys survive restarts, paste the block below into "
+            "**Streamlit Cloud → ⋮ → Settings → Secrets → Save**.  \n\n"
+            "Once that's saved, the app reads keys from `st.secrets` first (which is permanent)."
+        )
+
+        # Build a TOML block of all currently-saved baseline keys
+        toml_lines = []
+        existing_secrets = {}
+        try:
+            existing_secrets['TEAM_PASSWORD'] = st.secrets.get('TEAM_PASSWORD', '')
+            existing_secrets['CLOUD_DEPLOYMENT'] = st.secrets.get('CLOUD_DEPLOYMENT', True)
+            existing_secrets['WEB3FORMS_KEY'] = st.secrets.get('WEB3FORMS_KEY', '')
+        except Exception:
+            pass
+
+        if existing_secrets.get('TEAM_PASSWORD'):
+            toml_lines.append(f'TEAM_PASSWORD = "{existing_secrets["TEAM_PASSWORD"]}"')
+        for prov_meta in api_keys.PROVIDER_CATALOG:
+            kk = api_keys.get_key(prov_meta['id'])
+            if kk:
+                env_name = f"{prov_meta['id'].upper()}_API_KEY"
+                toml_lines.append(f'{env_name} = "{kk}"')
+        if existing_secrets.get('WEB3FORMS_KEY'):
+            toml_lines.append(f'WEB3FORMS_KEY = "{existing_secrets["WEB3FORMS_KEY"]}"')
+        toml_lines.append('CLOUD_DEPLOYMENT = true')
+
+        st.code("\n".join(toml_lines), language='toml')
+        st.caption(
+            "📋 Copy the entire block above → in Streamlit Cloud open Settings → Secrets → "
+            "paste it (replacing whatever's there) → Save. Done."
+        )
 
 
 def _admin_memory_section():

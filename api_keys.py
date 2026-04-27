@@ -289,3 +289,90 @@ def get_provider_meta(provider_id):
         if p['id'] == provider_id:
             return p
     return None
+
+
+# Sample model per provider for connection-test calls — kept tiny + cheap.
+_TEST_MODELS = {
+    'cerebras': 'llama3.1-8b',
+    'groq': 'llama-3.1-8b-instant',
+    'together': 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo',
+    'mistral': 'mistral-small-latest',
+    'cohere': 'command-r-08-2024',
+    'openrouter': 'meta-llama/llama-3.1-8b-instruct:free',
+    'deepseek': 'deepseek-chat',
+    'openai': 'gpt-4o-mini',
+    'claude': 'claude-haiku-4-5',
+}
+
+
+def test_provider_connection(provider_id, override_key=None):
+    """Make a tiny live call to confirm the key works. Logs the result.
+    Returns (ok: bool, message: str, model_used: str|None)."""
+    import requests as _r
+    try:
+        import database
+    except Exception:
+        database = None
+
+    meta = get_provider_meta(provider_id)
+    if not meta:
+        return False, f"Unknown provider {provider_id}", None
+
+    api_key = override_key or get_key(provider_id)
+    if not api_key:
+        return False, "No key configured", None
+
+    test_model = _TEST_MODELS.get(provider_id)
+    base = meta['api_base']
+
+    try:
+        if meta.get('compat') == 'anthropic':
+            r = _r.post(
+                f"{base}/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": test_model,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "Say ok"}],
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                if database:
+                    database.provider_log_ok(provider_id, test_model)
+                return True, "Connected ✅", test_model
+            err = f"{r.status_code}: {r.text[:160]}"
+            if database:
+                database.provider_log_err(provider_id, err)
+            return False, err, test_model
+        else:
+            # OpenAI-compatible
+            r = _r.post(
+                f"{base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": test_model,
+                    "messages": [{"role": "user", "content": "Say ok"}],
+                    "max_tokens": 10,
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                if database:
+                    database.provider_log_ok(provider_id, test_model)
+                return True, "Connected ✅", test_model
+            err = f"{r.status_code}: {r.text[:160]}"
+            if database:
+                database.provider_log_err(provider_id, err)
+            return False, err, test_model
+    except Exception as e:
+        if database:
+            database.provider_log_err(provider_id, str(e))
+        return False, str(e), test_model

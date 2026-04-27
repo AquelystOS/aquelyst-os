@@ -174,6 +174,17 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    # Connection-test history per baseline provider — tracks when each was last
+    # successfully called so the Admin UI can show "connected" status accurately.
+    c.execute('''CREATE TABLE IF NOT EXISTS provider_connection_log (
+        provider TEXT PRIMARY KEY,
+        last_ok_at TEXT,
+        last_err_at TEXT,
+        last_err TEXT,
+        last_model TEXT,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     conn.commit()
     conn.close()
 
@@ -411,6 +422,57 @@ def admin_list():
     c = conn.cursor()
     c.execute('''SELECT user_email, granted_by, created_at FROM admin_users
                  ORDER BY created_at''')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+# ============================================================================
+# Provider connection log — last-tested status of each baseline provider key.
+# ============================================================================
+def provider_log_ok(provider, model=None):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO provider_connection_log (provider, last_ok_at, last_model, last_err, last_err_at)
+                 VALUES (?, CURRENT_TIMESTAMP, ?, NULL, NULL)
+                 ON CONFLICT(provider) DO UPDATE SET
+                   last_ok_at = CURRENT_TIMESTAMP,
+                   last_model = excluded.last_model,
+                   last_err = NULL,
+                   last_err_at = NULL,
+                   updated_at = CURRENT_TIMESTAMP''',
+              (provider, model))
+    conn.commit()
+    conn.close()
+
+
+def provider_log_err(provider, error_text):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO provider_connection_log (provider, last_err_at, last_err)
+                 VALUES (?, CURRENT_TIMESTAMP, ?)
+                 ON CONFLICT(provider) DO UPDATE SET
+                   last_err_at = CURRENT_TIMESTAMP,
+                   last_err = excluded.last_err,
+                   updated_at = CURRENT_TIMESTAMP''',
+              (provider, (error_text or '')[:200]))
+    conn.commit()
+    conn.close()
+
+
+def provider_log_get(provider):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM provider_connection_log WHERE provider = ?', (provider,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def provider_log_all():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM provider_connection_log ORDER BY provider')
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
