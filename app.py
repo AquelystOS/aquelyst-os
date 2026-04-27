@@ -2034,7 +2034,7 @@ def _render_autopilot_idle(state):
             st.success("Reloaded default categories")
             st.rerun()
 
-        # Group editor by product line for navigability
+        # Product picker — avoids nested-expander API violation
         product_order = ['Duo Equine', 'Pets', 'SpillMaster', 'AMR', 'HouseHold',
                          'Inversion Misting']
         cats_by_product = {p: [] for p in product_order}
@@ -2043,25 +2043,37 @@ def _render_autopilot_idle(state):
             prod = cat.get('product') or 'Other'
             cats_by_product.setdefault(prod, []).append((orig_idx, cat))
 
-        for prod in product_order + (['Other'] if cats_by_product.get('Other') else []):
-            items = cats_by_product.get(prod, [])
-            if not items:
-                continue
-            active_count = sum(1 for _, c in items if c.get('active'))
-            with st.expander(f"**{prod}** — {len(items)} types ({active_count} active)",
-                              expanded=(prod == 'Duo Equine')):
-                for orig_idx, cat in items:
-                    c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
-                    c1.markdown(f"**{cat['type']}**")
-                    c2.caption(f"Priority {cat.get('priority', 3)}")
-                    new_active = c3.checkbox("Active", value=cat.get('active', False),
-                                              key=f"cat_active_{orig_idx}")
-                    if new_active != cat.get('active', False):
-                        hunt_categories.update_category(orig_idx, active=new_active)
-                        st.rerun()
-                    if c4.button("🗑️", key=f"cat_del_{orig_idx}"):
-                        hunt_categories.delete_category(orig_idx)
-                        st.rerun()
+        # Build label with counts so user can see at a glance
+        all_products = product_order + (['Other'] if cats_by_product.get('Other') else [])
+        labels = []
+        for p in all_products:
+            n = len(cats_by_product.get(p, []))
+            a = sum(1 for _, c in cats_by_product.get(p, []) if c.get('active'))
+            labels.append(f"{p} · {n} types ({a} active)")
+
+        st.markdown("")
+        st.markdown("##### Filter by product")
+        chosen_label = st.radio(
+            "Filter", labels, horizontal=True,
+            key="cat_product_filter", label_visibility="collapsed"
+        )
+        chosen_idx = labels.index(chosen_label)
+        chosen_product = all_products[chosen_idx]
+
+        st.markdown("")
+
+        for orig_idx, cat in cats_by_product[chosen_product]:
+            c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
+            c1.markdown(f"**{cat['type']}**")
+            c2.caption(f"Priority {cat.get('priority', 3)}")
+            new_active = c3.checkbox("Active", value=cat.get('active', False),
+                                      key=f"cat_active_{orig_idx}")
+            if new_active != cat.get('active', False):
+                hunt_categories.update_category(orig_idx, active=new_active)
+                st.rerun()
+            if c4.button("🗑️", key=f"cat_del_{orig_idx}"):
+                hunt_categories.delete_category(orig_idx)
+                st.rerun()
 
     auto_draft = st.checkbox(
         "✍️ Auto-write a personalized cold email for each lead (recommended)",
