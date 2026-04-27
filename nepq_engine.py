@@ -264,8 +264,10 @@ You have access to context about the prospect (business name, contact, score, pa
 # ============================================================================
 # Provider helpers
 # ============================================================================
+_CEREBRAS_BAD_MODELS = set()  # models we've discovered we can't use this process
+
 def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
-    """Call Cerebras with retries + model rotation when rate-limited.
+    """Call Cerebras with retries + model rotation when rate-limited or model 404s.
     Returns (text, error)."""
     api_key = api_keys.get_key('cerebras')
     if not api_key:
@@ -283,16 +285,27 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
 
     preferences = [
         'qwen-3-235b-a22b-instruct-2507',
-        'gpt-oss-120b',
-        'zai-glm-4.7',
+        'qwen-3-32b',
         'llama-3.3-70b',
         'llama3.3-70b',
-        'qwen-3-32b',
+        'llama-4-scout-17b-16e-instruct',
+        'deepseek-r1-distill-llama-70b',
+        'zai-glm-4.7',
+        'gpt-oss-120b',
+        'llama3.1-70b',
         'llama3.1-8b',
     ]
     if available:
-        models_to_try = [m for m in preferences if m in available] or [available[0]]
+        # Use whatever the API lists, ordered by our preference where overlap exists
+        ordered = [m for m in preferences if m in available]
+        leftovers = [m for m in available if m not in preferences]
+        models_to_try = ordered + leftovers
     else:
+        models_to_try = preferences
+
+    # Skip models we already proved don't work this session
+    models_to_try = [m for m in models_to_try if m not in _CEREBRAS_BAD_MODELS]
+    if not models_to_try:
         models_to_try = ['llama3.1-8b']
 
     headers = {
@@ -301,9 +314,9 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
     }
     last_err = ""
 
-    # Up to 3 attempts: try each model in turn; if all are rate-limited, sleep and retry
+    # Up to 3 attempts; rotate through models each pass; sleep between passes
     for attempt in range(3):
-        for model in models_to_try:
+        for model in list(models_to_try):
             try:
                 r = requests.post(
                     f"{CEREBRAS_BASE_URL}/chat/completions",
@@ -319,10 +332,19 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
                 if r.status_code == 200:
                     return r.json()['choices'][0]['message']['content'], None
                 last_err = f"Cerebras {r.status_code} on {model}: {r.text[:120]}"
-                # 429/503 → next model is worth trying right away
+                # 404: model doesn't exist or no access → cache so we never retry it
+                if r.status_code == 404:
+                    _CEREBRAS_BAD_MODELS.add(model)
+                    if model in models_to_try:
+                        models_to_try.remove(model)
+                    continue
+                # 429/503: rate-limited → try next model, retry later
                 if r.status_code in (429, 503):
                     continue
-                # 401/403/other → don't keep cycling models, key/auth issue
+                # 400 model_too_big or context errors → try smaller model
+                if r.status_code == 400:
+                    continue
+                # 401/403 → auth issue, no point retrying
                 break
             except requests.Timeout:
                 last_err = f"Cerebras timeout on {model}"
@@ -330,7 +352,10 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
             except Exception as e:
                 last_err = f"Cerebras error on {model}: {str(e)[:100]}"
                 continue
-        # Rotated through every model and still failing — short backoff and retry
+        # Refresh the list after culling 404s
+        models_to_try = [m for m in models_to_try if m not in _CEREBRAS_BAD_MODELS]
+        if not models_to_try:
+            break
         if attempt < 2:
             time.sleep(1.5 * (attempt + 1))
 
