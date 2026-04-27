@@ -96,7 +96,9 @@ def gather_site_intelligence(website_url):
     }
 
 
-RESEARCH_SYSTEM_PROMPT = """You are an elite B2B sales researcher analyzing horse-related businesses.
+RESEARCH_SYSTEM_PROMPT = """You are an elite B2B sales researcher for AqueLyst LLC, a company selling molecular odor-elimination and biosecurity products across SIX product lines (not just equine).
+
+Your job: read a business's website, decide which AqueLyst product (if any) fits them, and score the fit. Be open-minded — many businesses outside the horse industry are excellent prospects.
 
 You'll receive raw text scraped from a business's website. Extract structured intelligence as JSON.
 
@@ -104,12 +106,33 @@ CRITICAL RULES:
 - Output ONLY valid JSON, no markdown fences, no preamble
 - Use null for any field you genuinely cannot determine
 - Don't invent facts — if it's not in the text, return null
-- Return scores as integers 0-100 with honest reasoning"""
+- Return scores as integers 0-100 with honest reasoning
+- Do NOT default to equine — pick the product that genuinely fits"""
 
 
-RESEARCH_USER_TEMPLATE = """Analyze this business website content and return a JSON intelligence dossier.
+RESEARCH_USER_TEMPLATE = """Analyze this business website and return a JSON dossier.
 
-OUR PRODUCT: AqueLyst Duo Equine — eliminates barn ammonia odor and reduces flies. Used in horse stalls, trailers, bedding. Free 7-day trial offered.
+AQUELYST PRODUCTS — pick the SINGLE best fit for this business (or "none"):
+
+1. **Duo Equine** — Equine biosecurity. Eliminates barn ammonia, reduces flies, kills pathogens at the molecular level.
+   Fits: horse boarding facilities, equestrian centers, horse stables, racing/breeding farms, equine vets, riding schools, polo/rodeo/dressage facilities, racetracks, thoroughbred farms.
+
+2. **Pets** — Pet odor + biosecurity for facilities housing multiple animals.
+   Fits: dog boarding, doggy daycare, kennels, animal shelters, humane societies, veterinary clinics, grooming salons, pet stores, multi-pet rescues.
+
+3. **SpillMaster** — Industrial / commercial cleanup, food, healthcare, transit hygiene.
+   Fits: industrial cleanup contractors, hazmat services, food/meat/dairy processing, breweries/wineries, hospitals, nursing homes, manufacturing plants, schools, correctional facilities, transit authorities, airports.
+
+4. **AMR** — Auto / Marine / RV / Aviation / Mass Transit interior odor + biosecurity.
+   Fits: car dealerships, RV dealers, boat dealers, marinas, yacht clubs, rideshare/limo/taxi/bus fleets, trucking, school bus operators, aviation hangars, rental car companies.
+
+5. **HouseHold** — Residential & residential-adjacent commercial cleaning.
+   Fits: property management, Airbnb/vacation rental cleaning, apartment complexes, senior living, house cleaning services, mold/water/fire-damage restoration.
+
+6. **Inversion Misting System** — Custom large-facility installation for big spaces.
+   Fits: large warehouses, large manufacturing plants, agricultural processing, poultry / dairy / swine / cattle operations, feedlots, large greenhouses.
+
+If NO product fits this business (e.g. solo lawyer's blog, coffee shop, gym, unrelated SaaS), set product_fit="none", should_pursue=false, and explain in skip_reason.
 
 WEBSITE CONTENT:
 {site_text}
@@ -117,15 +140,17 @@ WEBSITE CONTENT:
 Return JSON with these exact fields:
 {{
   "business_name": "official business name from the site",
-  "business_type": "horse boarding facility | equestrian center | horse stable | trainer | breeder | rescue | tack shop | feed store | other equine business",
+  "business_type": "concise description, e.g. 'horse boarding facility', 'industrial waste management', 'apartment property management', 'multi-location auto dealership'",
   "owner_or_contact_name": "first and last name if mentioned, else null",
   "city": "city if mentioned",
   "state": "2-letter state code if mentioned",
-  "estimated_stalls": "number if mentioned, else null",
+  "size_signal": "any scale indicator — stalls, units, fleet size, employees, locations, sq ft — else null",
   "services_offered": ["short list of key services they offer"],
-  "likely_pain_points": ["specific pain points relevant to OUR PRODUCT — e.g. 'mentions managing 30 stalls', 'fly season concerns', 'premium client expectations', 'manure management'. Use evidence from the text."],
-  "personalized_hook": "ONE specific, factual sentence referencing something concrete from their site that you'd open a cold email with. Example: 'I saw on your site that you offer indoor and outdoor boarding for 25 horses at Keene Ridge.' Must be a real fact from the text. NOT generic.",
-  "match_score": "0-100 integer based on fit with our product",
+  "product_fit": "Duo Equine | Pets | SpillMaster | AMR | HouseHold | Inversion Misting | none",
+  "product_fit_reasoning": "one sentence on why this product fits this business",
+  "likely_pain_points": ["specific pain points relevant to the chosen product, citing evidence from the text"],
+  "personalized_hook": "ONE specific factual sentence referencing something concrete from their site you'd open a cold email with. Must reference a real fact from the text, not generic.",
+  "match_score": "0-100 integer based on how well the chosen product fits",
   "match_reasoning": "one sentence explaining the score",
   "is_real_business": true/false,
   "should_pursue": true/false,
@@ -332,15 +357,24 @@ def intelligence_to_lead_data(research_result, candidate):
     pain_points = intel.get('likely_pain_points', [])
     pain_text = " · ".join(pain_points) if pain_points else None
 
-    # Notes = personalized hook + reasoning
+    # Notes = product fit + personalized hook + reasoning
     hook = intel.get('personalized_hook') or ""
     reasoning = intel.get('match_reasoning') or ""
+    product_fit = intel.get('product_fit') or 'Duo Equine'
+    if product_fit == 'none':
+        product_fit = None
+    fit_reason = intel.get('product_fit_reasoning') or ""
+
     notes_parts = []
+    if product_fit:
+        notes_parts.append(f"🎯 Product fit: {product_fit}{(' — ' + fit_reason) if fit_reason else ''}")
     if hook:
         notes_parts.append(f"💡 Hook: {hook}")
     if reasoning:
         notes_parts.append(f"📊 AI Score: {reasoning}")
-    if intel.get('estimated_stalls'):
+    if intel.get('size_signal'):
+        notes_parts.append(f"📐 Size: {intel['size_signal']}")
+    elif intel.get('estimated_stalls'):
         notes_parts.append(f"🐴 Est. stalls: {intel['estimated_stalls']}")
     if intel.get('services_offered'):
         notes_parts.append(f"🛠 Services: {', '.join(intel['services_offered'][:5])}")
@@ -360,7 +394,7 @@ def intelligence_to_lead_data(research_result, candidate):
         'source_channel': candidate.get('source_query', 'web_search'),
         'message': hook,
         'pain_hypothesis': pain_text,
-        'product_fit': 'Duo Equine',
+        'product_fit': product_fit or 'Duo Equine',
         'notes': notes,
         '_ai_match_score': intel.get('match_score', 50),
         '_personalized_hook': hook,

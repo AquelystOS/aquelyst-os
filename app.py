@@ -1080,9 +1080,10 @@ def _inbox_status_fragment():
         )
         if st.button("View sent →", key="inbox_card_sent", use_container_width=True):
             st.session_state.page = "send_message"
+            st.session_state.compose_subtab = "sent"
             st.rerun()
 
-    # DRAFTS PENDING
+    # DRAFTS PENDING — clickable card jumps straight to drafts tab
     with cols[1]:
         st.html(
             "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
@@ -1090,8 +1091,11 @@ def _inbox_status_fragment():
             "<div style='font-size:0.72rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.3rem'>"
             "📝 Drafts Pending</div></div>"
         )
-        if st.button("Review drafts →", key="inbox_card_drafts", use_container_width=True):
+        if st.button(f"Review {len(pending)} draft{'s' if len(pending) != 1 else ''} →",
+                     key="inbox_card_drafts", use_container_width=True,
+                     type="primary" if len(pending) > 0 else "secondary"):
             st.session_state.page = "send_message"
+            st.session_state.compose_subtab = "drafts"
             st.rerun()
 
     # INBOX WATCHER — clickable TOGGLE
@@ -3870,18 +3874,29 @@ def show_send_message():
     sent = database.get_sent_drafts(limit=500)
     pending = database.get_pending_drafts(limit=500)
 
-    tab_compose, tab_sent, tab_drafts = st.tabs([
-        "✏️ Compose new",
-        f"📤 Sent by Bot ({len(sent)})",
-        f"📝 Drafts Pending ({len(pending)})",
-    ])
+    # Sub-tab state — controllable from outside (e.g., inbox "Review drafts" button)
+    active = st.session_state.setdefault('compose_subtab', 'compose')
 
-    with tab_sent:
+    sub_options = [
+        ('compose', "✏️ Compose new"),
+        ('sent', f"📤 Sent by Bot ({len(sent)})"),
+        ('drafts', f"📝 Drafts Pending ({len(pending)})"),
+    ]
+    sub_cols = st.columns(len(sub_options))
+    for i, (key, label) in enumerate(sub_options):
+        with sub_cols[i]:
+            is_active = active == key
+            if st.button(label, key=f"compose_subtab_{key}", use_container_width=True,
+                         type="primary" if is_active else "secondary"):
+                st.session_state.compose_subtab = key
+                st.rerun()
+    st.markdown("")
+
+    if active == 'sent':
         _show_sent_emails(sent)
-    with tab_drafts:
+    elif active == 'drafts':
         _show_pending_drafts(pending)
-
-    with tab_compose:
+    else:
         _show_compose_main()
 
 
