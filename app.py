@@ -552,6 +552,49 @@ def _admin_team_section():
 
 
 def _admin_keys_section():
+    import team as _team
+
+    PROVIDERS = ['cerebras', 'claude', 'openai', 'groq']
+
+    # ============================================================
+    # ADD / REPLACE TEAM-MEMBER KEY ON THEIR BEHALF
+    # ============================================================
+    st.markdown("##### ➕ Add or replace a team member's personal key")
+    st.caption("Use this to help someone (a co-founder, your mom, your sister) "
+                "who can't paste their own key. Their key still rotates as theirs in the pool.")
+    members = _team.load_team()
+    member_options = [(m['email'], f"{m.get('name', '?')} ({m['email']})")
+                       for m in members if m.get('email')]
+    extra_option = ('__custom__', 'Other email — type below')
+    member_options.append(extra_option)
+
+    with st.form("admin_add_member_key", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        sel = c1.selectbox("Whose key is this?", member_options,
+                            format_func=lambda o: o[1])
+        prov = c2.selectbox("Provider", PROVIDERS)
+        custom_email = ""
+        if sel and sel[0] == '__custom__':
+            custom_email = st.text_input("Their email")
+        new_key = st.text_input("Paste their key", type="password",
+                                 placeholder="csk-... / sk-ant-... / sk-... / gsk-...")
+        label = st.text_input("Label (optional)", placeholder="e.g. Mom's account")
+        submitted = st.form_submit_button("💾 Save key on their behalf",
+                                            type="primary", use_container_width=True)
+    if submitted:
+        target_email = (sel[0] if sel and sel[0] != '__custom__' else custom_email).strip().lower()
+        if not target_email or not new_key:
+            st.error("Need both a target email and a key.")
+        else:
+            database.team_keys_save(target_email, prov, new_key.strip(), label=label or None)
+            st.success(f"✅ Saved {prov} key for {target_email}")
+            st.rerun()
+
+    st.markdown("---")
+
+    # ============================================================
+    # CURRENT TEAM KEY POOL
+    # ============================================================
     st.markdown("##### Every team key in the pool")
     rows = database.team_keys_list_all()
     if not rows:
@@ -561,6 +604,8 @@ def _admin_keys_section():
         c1.markdown(f"`{r['user_email']}`")
         c2.markdown(f"**{r['provider']}**")
         status_bits = [f"`{r['masked_key']}`"]
+        if r.get('label'):
+            status_bits.append(f"_{r['label']}_")
         if r.get('last_ok_at'):
             status_bits.append(f"✅ {r['last_ok_at'][:16]}")
         if r.get('last_err_at'):
@@ -571,18 +616,39 @@ def _admin_keys_section():
             st.rerun()
 
     st.markdown("---")
-    st.markdown("##### Shared baseline keys")
-    for prov in ('cerebras', 'claude', 'openai'):
+
+    # ============================================================
+    # SHARED BASELINE KEYS
+    # ============================================================
+    st.markdown("##### 🌐 Shared baseline keys (team-wide fallback)")
+    st.caption("Anyone can use these. Used when no personal keys are available or all are throttled.")
+
+    for prov in PROVIDERS:
         k = api_keys.get_key(prov)
+        c1, c2, c3 = st.columns([2, 3, 1])
+        c1.markdown(f"**{prov.title()}**")
         if k:
             masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
-            c1, c2 = st.columns([5, 1])
-            c1.markdown(f"**{prov}** — `{masked}`")
-            if c2.button("🗑", key=f"adm_baseline_rm_{prov}"):
+            c2.markdown(f"`{masked}` ✅")
+            if c3.button("🗑", key=f"adm_baseline_rm_{prov}"):
                 api_keys.delete_key(prov)
                 st.rerun()
         else:
-            st.caption(f"**{prov}** — _not configured_")
+            c2.caption("_not configured_")
+            c3.caption("")
+
+    st.markdown("###### Add or replace a shared baseline key")
+    with st.form("admin_baseline_key", clear_on_submit=True):
+        c1, c2 = st.columns([1, 3])
+        bp = c1.selectbox("Provider", PROVIDERS, key="adm_baseline_prov")
+        bk = c2.text_input("Key", type="password",
+                            placeholder="csk-... / sk-ant-... / sk-... / gsk-...")
+        if st.form_submit_button("💾 Save shared baseline key",
+                                   type="primary", use_container_width=True):
+            if bk.strip():
+                api_keys.set_key(bp, bk.strip())
+                st.success(f"✅ Saved shared {bp} baseline key")
+                st.rerun()
 
 
 def _admin_memory_section():
