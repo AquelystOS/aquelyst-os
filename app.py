@@ -2204,17 +2204,25 @@ def _show_freeform_chat():
     if 'freeform_chat' not in st.session_state:
         st.session_state.freeform_chat = []
 
-    # Quick suggestions
-    st.markdown("**Quick prompts to get started:**")
-    cols = st.columns(4)
+    # Quick prompts — categorized
+    st.markdown("**Quick prompts:**")
     suggestions = [
-        ("💡 Ideas for new lead sources", "Give me 5 creative places to find horse barn owners I haven't thought of yet."),
-        ("📈 What's working?", "Look at our recent sent emails and tell me what messaging seems to land best."),
-        ("🎯 Practice handling 'too expensive'", "Roleplay: You're a barn owner. I'll handle the price objection. Hit me with it."),
-        ("📝 Help me think through this deal", "I have a prospect who's interested but hasn't replied in 5 days. What's the smartest next move?"),
+        ("📈 What's working in our pipeline?", "Look at our live CRM snapshot and tell me: which lead source is converting best, what intents we're seeing this week, and one concrete thing we should do MORE of."),
+        ("🎯 Roleplay 'too expensive'", "Roleplay: You're a horse barn owner objecting to the price of Duo Equine. Hit me with it like a real owner would. I'll respond NEPQ-style."),
+        ("💡 5 lead sources I haven't tried", "Give me 5 creative places to find prospects across our different verticals (horse, pet, commercial, fleet, residential) that aren't obvious."),
+        ("🧠 Pick the right framework", "I have a prospect that's been quiet for 14 days. Which sales framework should I use to re-engage and why?"),
+        ("📝 Critique my last 3 sent emails", "Pull our 3 most recent sent emails and critique them — what's working, what's salesy, what to fix."),
+        ("🐴 Equine industry playbook", "Brief me like an insider on the equine industry: who decides, top pains, lingo I should know, common objections."),
+        ("🚗 AMR industry playbook", "Brief me like an insider on auto/marine/RV/transit prospects: who decides, top pains, common objections, how to position the AMR product."),
+        ("🧪 SpillMaster playbook", "Brief me like an insider on commercial cleanup / food / healthcare prospects for SpillMaster."),
+        ("🏠 HouseHold playbook", "Brief me on residential & cleaning-service prospects — who decides, top pains, how to position HouseHold."),
+        ("💨 Inversion Misting playbook", "Brief me on large-facility / livestock / ag prospects — what to say to win the Inversion Misting capital sale."),
+        ("⚖️ Top 5 objections + rebuttals", "Walk me through the top 5 objections we hit and the NEPQ-style response for each."),
+        ("🔁 Re-engagement sequence", "Design a 3-touch re-engagement sequence for prospects who went quiet after one reply. Each message should use a different sales framework."),
     ]
-    for col, (label, prompt) in zip(cols, suggestions):
-        with col:
+    cols = st.columns(4)
+    for i, (label, prompt) in enumerate(suggestions):
+        with cols[i % 4]:
             if st.button(label, key=f"suggest_{label}", use_container_width=True):
                 st.session_state.freeform_chat.append({'role': 'user', 'content': prompt})
                 with st.spinner("Aqua thinking..."):
