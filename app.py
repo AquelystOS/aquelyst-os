@@ -2699,11 +2699,11 @@ def show_inbox():
             st.session_state.show_escalations = True
 
         if st.session_state.get('show_escalations'):
-            with st.expander("⚠️ Items needing your attention", expanded=True):
-                _show_escalations(pending)
-                if st.button("✅ Done reviewing — hide", key="hide_esc"):
-                    st.session_state.show_escalations = False
-                    st.rerun()
+            st.markdown("### ⚠️ Items needing your attention")
+            _show_escalations(pending)
+            if st.button("✅ Done reviewing — hide", key="hide_esc"):
+                st.session_state.show_escalations = False
+                st.rerun()
 
     st.markdown("---")
 
