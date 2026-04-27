@@ -165,6 +165,15 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_team_keys_provider ON team_api_keys(provider)')
 
+    # Admin allowlist — Joseph is always root admin (enforced in code).
+    # Joseph can grant/revoke admin to other team members through this table.
+    c.execute('''CREATE TABLE IF NOT EXISTS admin_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT NOT NULL UNIQUE,
+        granted_by TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     conn.commit()
     conn.close()
 
@@ -350,6 +359,61 @@ def team_keys_mark_err(user_email, provider, error_text):
               ((error_text or '')[:200], user_email.lower(), provider))
     conn.commit()
     conn.close()
+
+
+# ============================================================================
+# Admin allowlist — Joseph is the root admin (hardcoded). He can grant or
+# revoke admin to other team members via this table.
+# ============================================================================
+def admin_grant(user_email, granted_by):
+    if not user_email:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT OR IGNORE INTO admin_users (user_email, granted_by)
+                     VALUES (?, ?)''',
+                  (user_email.lower(), (granted_by or '').lower()))
+        conn.commit()
+        ok = c.rowcount > 0
+    finally:
+        conn.close()
+    return ok
+
+
+def admin_revoke(user_email):
+    if not user_email:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM admin_users WHERE user_email = ?', (user_email.lower(),))
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n > 0
+
+
+def admin_is_granted(user_email):
+    """True if this email has been granted admin (does NOT check root-admin rule)."""
+    if not user_email:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM admin_users WHERE user_email = ?', (user_email.lower(),))
+    found = c.fetchone() is not None
+    conn.close()
+    return found
+
+
+def admin_list():
+    """List all granted admins (not including the hardcoded root)."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT user_email, granted_by, created_at FROM admin_users
+                 ORDER BY created_at''')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
 
 
 def save_inbound_message(lead_id, from_email, from_name, to_email, subject, body,

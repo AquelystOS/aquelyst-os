@@ -475,16 +475,31 @@ def main():
 # ADMIN — Joseph-only (or anyone whose email is in the admin allowlist).
 # Lets him manage every team member's account, keys, and Aqua memory.
 # ============================================================================
-ADMIN_EMAILS = {'joseph@aquelyst.com'}  # extend if Joseph wants more admins
+ROOT_ADMIN_EMAIL = 'joseph@aquelyst.com'  # cannot be removed — always admin
+
+
+def is_root_admin(email=None):
+    if email is None:
+        try:
+            import team as _team
+            current = _team.get_current_user()
+            email = (current.get('email') or '').lower()
+        except Exception:
+            return False
+    return (email or '').lower() == ROOT_ADMIN_EMAIL
 
 
 def is_admin():
-    """Returns True if the currently-connected email is in the admin allowlist."""
+    """Joseph is always admin. Anyone else needs an explicit grant in admin_users."""
     try:
         import team as _team
         current = _team.get_current_user()
         email = (current.get('email') or '').lower()
-        return email in ADMIN_EMAILS
+        if not email:
+            return False
+        if email == ROOT_ADMIN_EMAIL:
+            return True
+        return database.admin_is_granted(email)
     except Exception:
         return False
 
@@ -506,18 +521,87 @@ def show_admin_console():
         "</div></div>"
     )
 
-    sections = st.tabs(["👥 Team", "🔑 API Keys", "🧠 Aqua Memory", "💬 Chat Logs", "📊 Usage"])
+    sections = st.tabs(["👥 Team", "🛡 Admins", "🔑 API Keys",
+                          "🧠 Aqua Memory", "💬 Chat Logs", "📊 Usage"])
 
     with sections[0]:
         _admin_team_section()
     with sections[1]:
-        _admin_keys_section()
+        _admin_admins_section()
     with sections[2]:
-        _admin_memory_section()
+        _admin_keys_section()
     with sections[3]:
-        _admin_chatlogs_section()
+        _admin_memory_section()
     with sections[4]:
+        _admin_chatlogs_section()
+    with sections[5]:
         _admin_usage_section()
+
+
+def _admin_admins_section():
+    """Manage who has admin access. Only the ROOT admin (Joseph) can grant or revoke."""
+    import team as _team
+    st.markdown("##### Who can access this Admin Console")
+
+    if not is_root_admin():
+        st.warning("🔒 Only the root admin (Joseph) can grant or revoke admin access. "
+                    "You can see who's an admin but can't change the list.")
+        granted = database.admin_list()
+        st.markdown(f"**Root admin:** `{ROOT_ADMIN_EMAIL}`")
+        if granted:
+            for row in granted:
+                st.caption(f"• `{row['user_email']}` — granted {row['created_at'][:16]}")
+        return
+
+    st.html(
+        f"<div style='background:rgba(6,182,212,0.08);border-left:3px solid #06b6d4;"
+        f"padding:0.7rem 1rem;border-radius:6px;margin-bottom:1rem'>"
+        f"<strong style='color:#0a0f1c'>👑 Root admin:</strong> "
+        f"<code>{ROOT_ADMIN_EMAIL}</code> (Joseph) — always admin, cannot be removed."
+        f"</div>"
+    )
+
+    granted = database.admin_list()
+    if granted:
+        st.markdown("**Additional admins you've granted:**")
+        for row in granted:
+            c1, c2, c3 = st.columns([3, 2, 1])
+            c1.markdown(f"`{row['user_email']}`")
+            c2.caption(f"granted {row['created_at'][:16]} by {row.get('granted_by') or '?'}")
+            if c3.button("Revoke", key=f"adm_revoke_{row['user_email']}"):
+                database.admin_revoke(row['user_email'])
+                st.success(f"Revoked admin from {row['user_email']}")
+                st.rerun()
+    else:
+        st.caption("_Nobody else is currently an admin. You're the only one with access._")
+
+    st.markdown("---")
+    st.markdown("##### ➕ Grant admin access")
+    members = _team.load_team()
+    options = [('__custom__', 'Other email — type below')] + [
+        (m['email'], f"{m.get('name', '?')} ({m['email']})")
+        for m in members
+        if m.get('email') and m['email'].lower() != ROOT_ADMIN_EMAIL
+        and not database.admin_is_granted(m['email'].lower())
+    ]
+    with st.form("admin_grant_form", clear_on_submit=True):
+        sel = st.selectbox("Who?", options, format_func=lambda o: o[1])
+        custom_email = ""
+        if sel and sel[0] == '__custom__':
+            custom_email = st.text_input("Their email")
+        if st.form_submit_button("👑 Grant admin", type="primary",
+                                   use_container_width=True):
+            target = (sel[0] if sel and sel[0] != '__custom__' else custom_email).strip().lower()
+            if not target:
+                st.error("Need an email.")
+            elif target == ROOT_ADMIN_EMAIL:
+                st.info("Joseph is already root admin.")
+            else:
+                if database.admin_grant(target, ROOT_ADMIN_EMAIL):
+                    st.success(f"✅ Granted admin to {target}")
+                    st.rerun()
+                else:
+                    st.warning(f"{target} already had admin.")
 
 
 def _admin_team_section():
