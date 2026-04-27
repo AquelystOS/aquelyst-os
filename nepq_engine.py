@@ -135,9 +135,10 @@ You should silently pick the framework that fits and apply it without naming it.
    - "Would it be helpful if I showed you what's worked for facilities your size?"
    - "Worth a quick conversation to see if it'd fit your operation?"
 
-8. **Commitment** (close, soft and confident)
-   - "Based on what you shared, want me to ship out a 7-day trial so you can see it for yourself?"
-   - "Sound like a fit?"
+8. **Commitment** (close, soft and confident — but DON'T close on a first cold email)
+   - "Sound like a fit to talk further?"
+   - "Want me to send over a 1-pager on how it actually works?"
+   - DO NOT default to offering a free trial, free sample, or free demo on cold outreach. Those are reserved for prospects who explicitly express interest first.
 
 ## EMAIL VOICE RULES
 
@@ -192,7 +193,7 @@ When pricing comes up: mention the 1-gallon entry price for their product, then 
 - **Top pain:** ammonia respiratory damage to horses, fly load in summer, manure odor for boarders, biosecurity for shows/breeding, urine-saturated bedding cost.
 - **Buying triggers:** boarder complaints, vet visit for respiratory issue, upcoming show season, new barn build, USEF/FEI biosecurity audit.
 - **Lingo:** stall, muck, bedding (shavings/pellets/straw), tack room, wash rack, indoor/outdoor arena, paddock, turnout, foal, broodmare, gelding, dressage/jumping/eventing/reining/cutting, AQHA/USEF/USEA/USDF/Jockey Club registries.
-- **Sales motion:** Connecting Q ("how are you handling fly season this year?") → free 7-day trial → testimonial.
+- **Sales motion:** Connecting question first ("how are you handling fly season this year?"). Build rapport. Only mention a trial / sample / demo if THEY ask or explicitly express interest.
 
 ### 🐾 Pets (Pets product)
 - **Who decides:** Kennel owner, shelter director, vet office manager.
@@ -248,7 +249,7 @@ When pricing comes up: mention the 1-gallon entry price for their product, then 
 - **Loss aversion:** "If you don't fix it, here's what next summer looks like..." > "Here's what you'll gain"
 - **Social proof:** "We're working with [comparable facility size/vertical] in [their state]"
 - **Anchoring:** Mention 55-gallon price first when sizing a big operation; the 5-gallon then feels small.
-- **Reciprocity:** Free 7-day trial = they feel compelled to engage.
+- **Reciprocity:** ONLY when prospect engages — offer something small (info packet, case study) before asking for next step.
 - **Specificity = credibility:** "23% reduction in fly count over 14 days" > "lots of customers love it"
 - **Concrete numbers:** Always quantify when possible. Stalls. Gallons. Days. Dollars.
 
@@ -1025,14 +1026,15 @@ def generate_followup(lead_data, prior_messages, touch_number):
     pain = lead_data.get('pain_hypothesis') or ''
 
     touch_focus = {
-        2: ("EDUCATIONAL: Briefly explain HOW barn odor actually works (ammonia → flies). "
-            "No pitch. Just useful insight. End with a curiosity question."),
-        3: ("TRIAL OFFER: Make a low-friction soft offer of the 7-day free barn trial. "
-            "Frame it as a 'no-obligation way to see for themselves.' One question."),
-        4: ("SOCIAL PROOF: Reference a similar facility (you can describe one realistically). "
+        2: ("EDUCATIONAL: Briefly explain HOW odor at scale actually works for THEIR vertical "
+            "(use the burden tags / pain hypothesis on the lead). No pitch. Just useful insight. "
+            "End with a curiosity question."),
+        3: ("DEEPER DISCOVERY: Ask a sharper question building on touch 1. No offer. "
+            "No trial mention. Goal is to get them talking about their actual setup."),
+        4: ("SOCIAL PROOF: Reference a comparable facility (you can describe one realistically). "
             "Their results in their own words. Then ask if their situation sounds similar."),
-        5: ("SEASONAL: Acknowledge fly/ammonia season is coming or here. "
-            "Ask if it's still on their radar."),
+        5: ("SEASONAL: Acknowledge a relevant seasonal pressure (fly season, audit cycle, "
+            "trade-in season, etc. — match it to their vertical). Ask if it's still on their radar."),
         6: ("FINAL: Honest, low-pressure 'closing the loop' — give them an out. "
             "'Should I assume this isn't a fit right now?' style. Polite, no guilt."),
     }

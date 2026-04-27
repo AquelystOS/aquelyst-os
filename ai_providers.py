@@ -21,57 +21,90 @@ def _system_prompt():
     """System prompt for sales outreach generation."""
     return """You are an expert B2B sales copywriter for AqueLyst, a company selling Duo Equine — a barn odor and fly elimination product.
 
-Duo Equine eliminates ammonia at the source (not masks it), reduces fly-attracting compounds, and improves barn air quality. It's used in horse stalls, trailers, and bedding. AqueLyst offers a free 7-day barn trial.
+Duo Equine eliminates ammonia at the source (not masks it), reduces fly-attracting compounds, and improves barn air quality. It's used in horse stalls, trailers, and bedding.
 
 Your messages must:
 - Be concise (5-7 sentences for emails, 2-3 for DMs)
 - Sound human, never AI-generated
 - Reference the prospect's specific business and pain
 - Lead with the problem, not the product
-- End with a clear, low-friction call-to-action (often: free 7-day trial)
+- End with ONE focused, low-pressure discovery question — no offer, no close, no sample/trial language unless the user explicitly asks for it
 - Avoid spammy words ("revolutionary", "amazing", "exclusive", excessive exclamation)
 - Avoid all-caps, emojis (unless casual DM), or salesy language
+- Do NOT pitch a free trial, sample, demo, or any offer unless explicitly instructed for THIS message
 
 Output ONLY the message body. No preamble, no explanations, no markdown formatting unless requested."""
 
 
 def _build_user_prompt(message_type, lead_data):
-    """Build context-rich prompt for AI."""
+    """Build context-rich prompt for AI. Forces AI to engage with the SPECIFIC
+    prospect's research data — not write generic templates."""
     contact = lead_data.get('contact_name') or 'there'
     first_name = contact.split()[0] if contact and contact != 'there' else 'there'
     business = lead_data.get('business_name', '')
-    business_type = lead_data.get('business_type', 'horse facility')
-    pain = lead_data.get('pain_hypothesis') or lead_data.get('message') or 'barn odor and flies'
+    business_type = lead_data.get('business_type', 'unknown')
+    pain = lead_data.get('pain_hypothesis') or lead_data.get('message') or ''
     state = lead_data.get('state', '')
     city = lead_data.get('city', '')
     website = lead_data.get('website', '')
     notes = lead_data.get('notes', '')
+    product_fit = lead_data.get('product_fit') or 'unknown'
 
-    location = f"{city}, {state}".strip(', ') if city or state else ''
+    location = f"{city}, {state}".strip(', ') if city or state else 'unknown'
 
-    context = f"""PROSPECT INFO:
-- Business: {business}
+    # Pull the AI-research personalized_hook (a specific fact about THIS prospect)
+    hook = (lead_data.get('_personalized_hook') or
+             lead_data.get('personalized_hook') or '')
+
+    # Surface burden tags + need-probability so the email can engage with REAL pain
+    intel_lines = []
+    try:
+        import intelligence_layer as _il
+        burden = _il.get_burden_tags(business_type)
+        if burden:
+            intel_lines.append(f"Operational burden indicators: {', '.join(burden[:6])}")
+    except Exception:
+        pass
+
+    context = f"""PROSPECT DATA (use these specifics — don't write a generic email):
+- Business: {business or '(unknown — flag in subject)'}
 - Type: {business_type}
-- Contact name (first name): {first_name}
-- Location: {location or 'unknown'}
+- Product fit (per research): {product_fit}
+- Contact first name: {first_name}
+- Location: {location}
 - Website: {website or 'none'}
-- Known pain/problem: {pain}
-- Additional notes: {notes or 'none'}
+- Specific fact / hook from website research: {hook or '(none — must reference business type + location)'}
+- Pain hypothesis: {pain or '(infer from operational burden indicators below)'}"""
+    if intel_lines:
+        context += "\n- " + "\n- ".join(intel_lines)
+    if notes:
+        context += f"\n\nADDITIONAL RESEARCH NOTES:\n{notes[:600]}"
 
-SENDER: Joseph at AqueLyst (joseph@aquelyst.com)
-"""
+    context += "\n\nSENDER: write FROM the logged-in team member (see YOU ARE WRITING AS block in system prompt)."
 
     type_instructions = {
-        "cold_email": "Write a cold email (5-7 sentences). Subject line on first line as 'Subject: ...', then blank line, then body. Reference their pain. Offer the free 7-day trial. End with a soft CTA.",
-        "reply_to_inbound": "They reached out to us. Write a warm, helpful reply that acknowledges their problem and offers next steps (call or trial). Subject line first.",
-        "instagram_dm": "Write a casual Instagram DM (2-3 sentences). Friendly, lowercase, no subject line. End with a question.",
-        "facebook_message": "Write a Facebook message (3-4 sentences). Professional but friendly. No subject line.",
-        "phone_opener": "Write a 20-30 second phone opener script. Mention you're calling because of their {business_type} and our solution for {pain}. Ask for 30 seconds.",
-        "follow_up_education": "Write a follow-up email teaching them HOW barn odor works (ammonia → flies → bad air). Educational, not salesy. Subject line first. Soft CTA at end.",
-        "trial_offer": "Write an email formally offering the free 7-day trial. Make it easy to say yes. Subject line first.",
-        "social_proof": "Write an email referencing a similar customer success story (you can invent a realistic one for a similar facility). Subject line first.",
-        "objection_budget": "They said budget is tight. Reframe: trial is free, product pays for itself. Subject line first.",
-        "objection_timing": "They said now isn't a good time. Reframe: fly/odor season is the worst time to wait. Subject line first.",
+        "cold_email": (
+            "Write a cold email (5-7 sentences). Subject line first as 'Subject: ...', blank line, body.\n"
+            "RULES (STRICT):\n"
+            "1. You MUST reference at least ONE specific fact from the prospect's research above (their hook, their location, their business type, or a burden indicator). NO generic openers.\n"
+            "2. Match the product fit to the pain — if it's Pets, talk kennel/shelter pain, NOT horse pain.\n"
+            "3. End with ONE focused, low-pressure discovery question.\n"
+            "4. NO offer, NO trial, NO sample, NO demo — just discovery.\n"
+            "5. If the data is too thin to write something specific, output exactly: 'ESCALATE: insufficient research data' and nothing else."
+        ),
+        "reply_to_inbound": (
+            "They reached out. Read what they said and RESPOND TO IT — don't pivot. Acknowledge their actual words first, then engage. Subject 'Re: ...' first."
+        ),
+        "instagram_dm": "Casual Instagram DM (2-3 sentences). Lowercase, no subject. Reference one specific thing from their profile/business. End with a question.",
+        "facebook_message": "Facebook message (3-4 sentences). Professional but friendly. Reference one specific thing about them. No subject line.",
+        "phone_opener": "20-30 second phone opener. Mention their {business_type} specifically and the burden YOU INFERRED (not generic). Ask for 30 seconds.",
+        "follow_up_education": (
+            "Educational follow-up. Briefly explain HOW their specific operational pain works at the molecular level — match it to their vertical's burden indicators. No pitch. End with a curiosity question."
+        ),
+        "trial_offer": "Formal trial offer (only when explicitly requested by user — never a default). Subject first. Easy to say yes.",
+        "social_proof": "Reference a comparable facility (describe one realistically for THEIR vertical, not generic). Subject first.",
+        "objection_budget": "They said budget is tight. Reframe with math relevant to their vertical. Subject first.",
+        "objection_timing": "They said timing's bad. Reframe with the seasonal/operational pressure SPECIFIC to their vertical. Subject first.",
     }
 
     instruction = type_instructions.get(message_type, "Write an outreach message.")
