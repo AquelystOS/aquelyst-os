@@ -1057,6 +1057,167 @@ def scrape_superpages(business_type, location, max_results=30):
         return []
 
 
+def scrape_yelp(business_type, location, max_results=20):
+    """Scrape Yelp search results.
+    Yelp doesn't surface direct business websites in search HTML — it surfaces
+    Yelp profile URLs. We follow each profile to extract the actual website.
+    Quality is high (vetted businesses with reviews). Slower than other sources."""
+    if not location:
+        location = "United States"
+    q = quote_plus(business_type)
+    loc = quote_plus(location)
+    url = f"https://www.yelp.com/search?find_desc={q}&find_loc={loc}"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT,
+                                         "Accept": "text/html"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        # Extract /biz/{slug} profile URLs from search results
+        profile_slugs = list(set(re.findall(r'href="(/biz/[^"?]+)"', r.text)))[:max_results]
+        results = []
+        seen_domains = set()
+        for slug in profile_slugs:
+            try:
+                pr = requests.get(f"https://www.yelp.com{slug}",
+                                   headers={"User-Agent": USER_AGENT},
+                                   timeout=REQUEST_TIMEOUT)
+                if pr.status_code != 200:
+                    continue
+                # Yelp's "Business website" link
+                m = re.search(
+                    r'<a[^>]+href="(https?://(?!(?:www\.)?yelp\.com)[^"]+)"[^>]*>'
+                    r'\s*[a-zA-Z0-9.-]+\.(?:com|net|org|co|us|biz|info|farm)\b',
+                    pr.text)
+                if not m:
+                    m = re.search(
+                        r'class="[^"]*biz-website[^"]*"[^>]*href="([^"]+)"', pr.text)
+                if not m:
+                    continue
+                u = m.group(1)
+                # Yelp redirects through biz_redir; extract the actual url query param
+                redir_m = re.search(r'url=([^&]+)', u)
+                if redir_m:
+                    from urllib.parse import unquote
+                    u = unquote(redir_m.group(1))
+                if not u.startswith('http'):
+                    continue
+                if _should_skip(u):
+                    continue
+                d = _domain_of(u)
+                if not d or d in seen_domains:
+                    continue
+                seen_domains.add(d)
+                # Extract name from <title>
+                name_m = re.search(r'<title>([^<|]+)\s*[\|<]', pr.text)
+                name = (name_m.group(1).strip() if name_m else d)[:80]
+                results.append({'url': u, 'title': name,
+                                'snippet': f'Yelp-listed {business_type}'})
+                time.sleep(0.4)
+                if len(results) >= max_results:
+                    break
+            except Exception:
+                continue
+        return results
+    except Exception:
+        return []
+
+
+def search_foursquare(business_type, location, max_results=30):
+    """Foursquare Places API (free tier 50 calls/day, paid scales up).
+    Requires user-provided API key in Setup → API Keys → Foursquare."""
+    try:
+        import api_keys as _ak
+        api_key = _ak.get_key('foursquare')
+    except Exception:
+        api_key = None
+    if not api_key:
+        return []
+    try:
+        params = {
+            'query': business_type,
+            'limit': min(max_results, 50),
+        }
+        if location:
+            params['near'] = location
+        r = requests.get(
+            "https://api.foursquare.com/v3/places/search",
+            params=params,
+            headers={
+                "Authorization": api_key,
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return []
+        results = []
+        seen_domains = set()
+        for place in r.json().get('results', []):
+            website = place.get('website') or ''
+            if not website:
+                continue
+            if not website.startswith('http'):
+                website = 'https://' + website
+            if _should_skip(website):
+                continue
+            d = _domain_of(website)
+            if not d or d in seen_domains:
+                continue
+            seen_domains.add(d)
+            name = place.get('name', d)[:80]
+            results.append({
+                'url': website,
+                'title': name,
+                'snippet': f'Foursquare {business_type} in '
+                           f'{place.get("location", {}).get("locality", location or "")}',
+            })
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def scrape_opencorporates(business_type, location, max_results=20):
+    """Scrape OpenCorporates — public business registry.
+    Returns company names + states for follow-up website discovery (no direct URLs)."""
+    q = quote_plus(business_type)
+    if location:
+        loc_param = quote_plus(location)
+        url = f"https://opencorporates.com/companies?q={q}&jurisdiction_code=us&utf8=%E2%9C%93&commit=Go&place={loc_param}"
+    else:
+        url = f"https://opencorporates.com/companies?q={q}&jurisdiction_code=us&utf8=%E2%9C%93&commit=Go"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT,
+                                         "Accept": "text/html"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        # Company names are listed in /companies/us_xx/ links
+        results = []
+        seen_names = set()
+        for m in re.findall(
+            r'<a[^>]+href="/companies/us_[a-z]+/[^"]+"[^>]*>([^<]+)</a>', r.text):
+            name = m.strip()
+            if len(name) < 3 or name.lower() in seen_names:
+                continue
+            seen_names.add(name.lower())
+            # Build a search-style "candidate" — autopilot's discovery layer
+            # will do a website lookup based on the name
+            results.append({
+                'url': f"https://www.google.com/search?q={quote_plus(name)}",
+                'title': name,
+                'snippet': f'OpenCorporates US registry: {business_type}',
+                'requires_website_lookup': True,
+            })
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
 def scrape_merchantcircle(business_type, location, max_results=30):
     """Scrape MerchantCircle.com — small business directory."""
     if not location:
@@ -1543,6 +1704,46 @@ def discover_horse_businesses(business_type, location=None, max_results=20, on_p
             if on_progress:
                 on_progress("MerchantCircle", f"failed: {str(e)[:40]}")
         time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3g: Yelp (slower but high signal) =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("Yelp", f"scraping vetted {business_type}s")
+        try:
+            for r in scrape_yelp(business_type, location, max_results=20):
+                add_candidate(r, "Yelp")
+            if on_progress:
+                on_progress("Yelp", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("Yelp", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 3h: Foursquare Places API (if user has key) =====
+    try:
+        import api_keys as _ak
+        if _ak.has_key('foursquare'):
+            if on_progress:
+                on_progress("Foursquare", f"querying Places API for {business_type}")
+            for r in search_foursquare(business_type, location, max_results=30):
+                add_candidate(r, "Foursquare")
+            if on_progress:
+                on_progress("Foursquare", f"total now: {len(all_candidates)}")
+    except Exception as e:
+        if on_progress:
+            on_progress("Foursquare", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 3i: OpenCorporates (public US business registry) =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("OpenCorporates", f"public business registry for {business_type}")
+        try:
+            for r in scrape_opencorporates(business_type, location, max_results=20):
+                add_candidate(r, "OpenCorporates")
+            if on_progress:
+                on_progress("OpenCorporates", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("OpenCorporates", f"failed: {str(e)[:40]}")
 
     # ===== SOURCE 3f: Vertical-aware industry directories =====
     # Map business_type → product fit, then pull from the right industry pack

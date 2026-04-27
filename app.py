@@ -882,6 +882,69 @@ def _admin_keys_section():
                                     )
 
     # ============================================================
+    # LEAD DISCOVERY KEYS (different category — for autopilot, not for chat)
+    # ============================================================
+    st.markdown("---")
+    st.markdown("##### 🔍 Lead Discovery API keys (for Autopilot)")
+    st.caption("These power Autopilot's web-search and place-data sources. "
+                "Each adds a new lane of leads.")
+
+    DISCOVERY_PROVIDERS = [
+        {
+            'id': 'foursquare',
+            'name': 'Foursquare Places',
+            'tier': 'FREE',
+            'tier_color': '#16a34a',
+            'note': 'Comprehensive places database. Free 50/day or 1000/day with Places Pro.',
+            'keys_url': 'https://foursquare.com/developers/apps',
+            'signup_url': 'https://foursquare.com/developers',
+            'key_prefix': '',
+        },
+        {
+            'id': 'brave',
+            'name': 'Brave Search',
+            'tier': 'FREEMIUM',
+            'tier_color': '#06b6d4',
+            'note': 'Fast independent search index. 2000 free queries/month.',
+            'keys_url': 'https://api.search.brave.com/app/keys',
+            'signup_url': 'https://brave.com/search/api/',
+            'key_prefix': 'BSA',
+        },
+    ]
+    for prov in DISCOVERY_PROVIDERS:
+        pid = prov['id']
+        k = api_keys.get_key(pid)
+        with st.container(border=True):
+            top = st.columns([3, 1, 2])
+            top[0].markdown(f"**{prov['name']}**")
+            top[1].markdown(
+                f"<span style='background:{prov['tier_color']};color:white;"
+                f"padding:0.2rem 0.6rem;border-radius:10px;font-size:0.72rem;"
+                f"font-weight:700;letter-spacing:0.05em'>{prov['tier']}</span>",
+                unsafe_allow_html=True
+            )
+            top[2].markdown(f"[**🔗 Get key →**]({prov['keys_url']})")
+            st.caption(prov['note'])
+            row = st.columns([5, 1])
+            if k:
+                masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
+                row[0].markdown(f"✅ Connected · `{masked}`")
+                if row[1].button("🗑", key=f"adm_disc_rm_{pid}"):
+                    api_keys.delete_key(pid)
+                    st.rerun()
+            else:
+                with row[0].popover("➕ Add key", use_container_width=True):
+                    nk = st.text_input(f"{prov['name']} key", type="password",
+                                        placeholder=prov['key_prefix'] + '...' if prov['key_prefix'] else 'paste key',
+                                        key=f"adm_disc_input_{pid}")
+                    if st.button("Save", key=f"adm_disc_save_{pid}",
+                                  type="primary", use_container_width=True):
+                        if nk.strip():
+                            api_keys.set_key(pid, nk.strip())
+                            st.success(f"✅ Saved {prov['name']} key")
+                            st.rerun()
+
+    # ============================================================
     # PERMANENT-PERSISTENCE HELPER (Streamlit Cloud ephemeral fix)
     # ============================================================
     st.markdown("---")
