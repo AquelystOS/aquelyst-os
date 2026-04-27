@@ -1057,6 +1057,280 @@ def scrape_superpages(business_type, location, max_results=30):
         return []
 
 
+# ============================================================================
+# REGULATORY / GOVERNMENT DATA SOURCES (the Industrial Intelligence Layer)
+# These query free public datasets to find operationally-active facilities.
+# ============================================================================
+def scrape_usda_aphis(business_type, location, max_results=30):
+    """USDA APHIS Animal Care licensees — kennels, breeders, exhibitors,
+    research facilities. Public regulatory data. Gold for Pets + equine breeders."""
+    if not _is_animal_related(business_type):
+        return []
+    # APHIS publishes annual licensee lists as PDFs/CSVs; scraping their search UI
+    # is unstable. Best approach: hit their inspection-results search which DOES
+    # surface licensee names + states.
+    state_code = _extract_state_code(location)
+    if not state_code:
+        return []
+    url = ("https://acis.aphis.edc.usda.gov/ords/f?p=118:201::::::"
+           f"P201_STATE:{state_code}")
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        results = []
+        seen = set()
+        # Licensee table rows have entity name in <td>
+        for m in re.findall(r'<td[^>]*>([A-Z][A-Z0-9 .,&\'/-]{4,80})</td>', r.text):
+            name = m.strip()
+            if name in seen or len(name) < 5:
+                continue
+            seen.add(name)
+            results.append({
+                'url': f"https://www.google.com/search?q={quote_plus(name + ' ' + state_code)}",
+                'title': name,
+                'snippet': f'USDA APHIS Animal Care licensee in {state_code}',
+                'requires_website_lookup': True,
+                'tags': ['REGULATED', 'ANIMAL_FACILITY'],
+            })
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def scrape_epa_envirofacts(business_type, location, max_results=30):
+    """EPA EnviroFacts — public REST API for facilities under EPA regulation.
+    Datasets used:
+    - RCRAINFO: hazardous waste generators (ideal for SpillMaster prospects)
+    - PCS: water/wastewater permit holders (ideal for SpillMaster + Inversion Misting)
+    """
+    state_code = _extract_state_code(location) or 'US'
+    facilities = []
+    seen_names = set()
+    burden_tags = []
+
+    # RCRAINFO — hazardous waste generators
+    if _is_industrial_type(business_type):
+        try:
+            rurl = (f"https://data.epa.gov/efservice/RCR_HD_HANDLER/"
+                    f"LOCATION_STATE/=/{state_code}/JSON")
+            r = requests.get(rurl, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                for f in r.json()[:max_results // 2]:
+                    name = f.get('HD_HANDLER_NAME') or ''
+                    if not name or name in seen_names:
+                        continue
+                    seen_names.add(name)
+                    city = f.get('LOCATION_CITY') or ''
+                    facilities.append({
+                        'url': f"https://www.google.com/search?q={quote_plus(name + ' ' + city + ' ' + state_code)}",
+                        'title': name.title()[:80],
+                        'snippet': f'EPA RCRA hazardous waste generator in {city}, {state_code}',
+                        'requires_website_lookup': True,
+                        'tags': ['EPA_REGULATED', 'HAZMAT', 'INDUSTRIAL_CLEANING'],
+                        'burden': ['MICROBIAL_RISK', 'RUNOFF_RISK'],
+                    })
+        except Exception:
+            pass
+
+    # PCS — water permit holders (NPDES wastewater)
+    if _is_water_or_industrial_type(business_type):
+        try:
+            wurl = (f"https://data.epa.gov/efservice/PCS_PERMIT_FACILITY/"
+                    f"STATE_CODE/=/{state_code}/JSON")
+            r = requests.get(wurl, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                for f in r.json()[:max_results // 2]:
+                    name = f.get('FACILITY_NAME') or ''
+                    if not name or name in seen_names:
+                        continue
+                    seen_names.add(name)
+                    city = f.get('CITY_NAME') or ''
+                    facilities.append({
+                        'url': f"https://www.google.com/search?q={quote_plus(name + ' ' + city + ' ' + state_code)}",
+                        'title': name.title()[:80],
+                        'snippet': f'NPDES wastewater permit holder in {city}, {state_code}',
+                        'requires_website_lookup': True,
+                        'tags': ['EPA_REGULATED', 'WASTEWATER'],
+                        'burden': ['MICROBIAL_RISK', 'AMMONIA_RISK', 'RUNOFF_RISK'],
+                    })
+        except Exception:
+            pass
+
+    return facilities[:max_results]
+
+
+def scrape_fmcsa_safer(business_type, location, max_results=30):
+    """FMCSA SAFER — every registered motor carrier in the US. Gold for AMR
+    (trucking, bus, fleets, hazmat haulers)."""
+    if not _is_fleet_related(business_type):
+        return []
+    # FMCSA QC by name search
+    state_code = _extract_state_code(location)
+    q = quote_plus(business_type)
+    url = ("https://safer.fmcsa.dot.gov/keywordx.asp?searchstring="
+           f"{q}&SEARCHTYPE=name")
+    try:
+        r = requests.post(
+            "https://safer.fmcsa.dot.gov/keywordx.asp",
+            data={
+                'searchstring': business_type,
+                'SEARCHTYPE': 'name',
+            },
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if r.status_code != 200:
+            return []
+        results = []
+        seen = set()
+        for m in re.findall(
+            r'<a[^>]+href="[^"]*pkg_carrquery[^"]*"[^>]*>([^<]{3,80})</a>',
+            r.text):
+            name = m.strip()
+            if name in seen or len(name) < 4:
+                continue
+            seen.add(name)
+            results.append({
+                'url': f"https://www.google.com/search?q={quote_plus(name)}",
+                'title': name,
+                'snippet': f'FMCSA-registered motor carrier ({business_type})',
+                'requires_website_lookup': True,
+                'tags': ['DOT_REGULATED', 'FLEET'],
+                'burden': ['SANITATION_INTENSITY', 'INTERIOR_ODOR'],
+            })
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
+def search_reddit(business_type, location, max_results=20):
+    """Reddit public JSON search — finds owner self-promo posts mentioning
+    the business type + location."""
+    q_parts = [business_type]
+    if location:
+        q_parts.append(location)
+    q = quote_plus(' '.join(q_parts))
+    url = (f"https://www.reddit.com/search.json?q={q}&sort=relevance&t=year"
+           f"&limit={min(max_results, 100)}")
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT + " AqueLystOS/1.0"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        results = []
+        seen_domains = set()
+        for child in data.get('data', {}).get('children', []):
+            post = child.get('data', {})
+            link = post.get('url_overridden_by_dest') or post.get('url') or ''
+            title = post.get('title', '')[:80]
+            if not link or 'reddit.com' in link:
+                continue
+            if _should_skip(link):
+                continue
+            d = _domain_of(link)
+            if not d or d in seen_domains:
+                continue
+            seen_domains.add(d)
+            results.append({
+                'url': link,
+                'title': title or d,
+                'snippet': f'Reddit r/{post.get("subreddit", "?")}: '
+                           f'{title[:80]}',
+            })
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
+# ----------------------------------------------------------------------------
+# Helpers used by the regulatory scrapers above
+# ----------------------------------------------------------------------------
+def _extract_state_code(location):
+    """Pull a 2-letter US state code from a location string."""
+    if not location:
+        return None
+    upper = location.upper()
+    m = re.search(r'\b([A-Z]{2})\b', upper)
+    if m:
+        return m.group(1)
+    state_names = {
+        'ALABAMA': 'AL', 'ALASKA': 'AK', 'ARIZONA': 'AZ', 'ARKANSAS': 'AR',
+        'CALIFORNIA': 'CA', 'COLORADO': 'CO', 'CONNECTICUT': 'CT',
+        'DELAWARE': 'DE', 'FLORIDA': 'FL', 'GEORGIA': 'GA', 'HAWAII': 'HI',
+        'IDAHO': 'ID', 'ILLINOIS': 'IL', 'INDIANA': 'IN', 'IOWA': 'IA',
+        'KANSAS': 'KS', 'KENTUCKY': 'KY', 'LOUISIANA': 'LA', 'MAINE': 'ME',
+        'MARYLAND': 'MD', 'MASSACHUSETTS': 'MA', 'MICHIGAN': 'MI',
+        'MINNESOTA': 'MN', 'MISSISSIPPI': 'MS', 'MISSOURI': 'MO',
+        'MONTANA': 'MT', 'NEBRASKA': 'NE', 'NEVADA': 'NV',
+        'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ', 'NEW MEXICO': 'NM',
+        'NEW YORK': 'NY', 'NORTH CAROLINA': 'NC', 'NORTH DAKOTA': 'ND',
+        'OHIO': 'OH', 'OKLAHOMA': 'OK', 'OREGON': 'OR', 'PENNSYLVANIA': 'PA',
+        'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC', 'SOUTH DAKOTA': 'SD',
+        'TENNESSEE': 'TN', 'TEXAS': 'TX', 'UTAH': 'UT', 'VERMONT': 'VT',
+        'VIRGINIA': 'VA', 'WASHINGTON': 'WA', 'WEST VIRGINIA': 'WV',
+        'WISCONSIN': 'WI', 'WYOMING': 'WY',
+    }
+    for name, code in state_names.items():
+        if name in upper:
+            return code
+    return None
+
+
+def _is_animal_related(business_type):
+    if not business_type:
+        return False
+    t = business_type.lower()
+    return any(k in t for k in [
+        'kennel', 'animal', 'pet', 'horse', 'equine', 'breeder',
+        'shelter', 'humane', 'vet', 'zoo', 'rescue', 'boarding',
+        'cattle', 'dairy', 'poultry', 'swine', 'hog', 'sheep', 'goat',
+        'livestock', 'farm',
+    ])
+
+
+def _is_industrial_type(business_type):
+    if not business_type:
+        return False
+    t = business_type.lower()
+    return any(k in t for k in [
+        'industrial', 'manufacturing', 'factory', 'plant', 'processing',
+        'chemical', 'hazmat', 'cleanup', 'food processing', 'meat',
+        'dairy processing', 'brewery', 'rendering', 'recycling',
+        'waste', 'remediation', 'crematorium', 'mortuary',
+    ])
+
+
+def _is_water_or_industrial_type(business_type):
+    if not business_type:
+        return False
+    t = business_type.lower()
+    return _is_industrial_type(business_type) or any(k in t for k in [
+        'wastewater', 'water treatment', 'sewage', 'dairy', 'poultry',
+        'feedlot', 'hog', 'swine', 'cafo', 'pulp', 'paper',
+    ])
+
+
+def _is_fleet_related(business_type):
+    if not business_type:
+        return False
+    t = business_type.lower()
+    return any(k in t for k in [
+        'trucking', 'truck', 'fleet', 'bus', 'taxi', 'limo', 'rideshare',
+        'transit', 'delivery', 'rv', 'recreational vehicle', 'moving',
+        'rental car', 'transport', 'school bus', 'shuttle', 'freight',
+        'haul', 'amazon delivery',
+    ])
+
+
 def scrape_yelp(business_type, location, max_results=20):
     """Scrape Yelp search results.
     Yelp doesn't surface direct business websites in search HTML — it surfaces
@@ -1744,6 +2018,58 @@ def discover_horse_businesses(business_type, location=None, max_results=20, on_p
         except Exception as e:
             if on_progress:
                 on_progress("OpenCorporates", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 4a: USDA APHIS Animal Care licensees =====
+    if _is_animal_related(business_type):
+        if on_progress:
+            on_progress("USDA APHIS", f"federally-licensed animal facilities")
+        try:
+            for r in scrape_usda_aphis(business_type, location, max_results=30):
+                add_candidate(r, "USDA APHIS")
+            if on_progress:
+                on_progress("USDA APHIS", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("USDA APHIS", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 4b: EPA EnviroFacts (RCRA + NPDES) =====
+    if _is_industrial_type(business_type) or _is_water_or_industrial_type(business_type):
+        if on_progress:
+            on_progress("EPA EnviroFacts", f"hazmat + wastewater permit holders")
+        try:
+            for r in scrape_epa_envirofacts(business_type, location, max_results=30):
+                add_candidate(r, "EPA EnviroFacts")
+            if on_progress:
+                on_progress("EPA EnviroFacts", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("EPA EnviroFacts", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 4c: FMCSA SAFER (motor carriers — fleets) =====
+    if _is_fleet_related(business_type):
+        if on_progress:
+            on_progress("FMCSA SAFER", f"DOT-registered motor carriers")
+        try:
+            for r in scrape_fmcsa_safer(business_type, location, max_results=30):
+                add_candidate(r, "FMCSA SAFER")
+            if on_progress:
+                on_progress("FMCSA SAFER", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("FMCSA SAFER", f"failed: {str(e)[:40]}")
+
+    # ===== SOURCE 4d: Reddit (owner self-promotion posts) =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("Reddit", f"public posts mentioning {business_type}")
+        try:
+            for r in search_reddit(business_type, location, max_results=20):
+                add_candidate(r, "Reddit")
+            if on_progress:
+                on_progress("Reddit", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("Reddit", f"failed: {str(e)[:40]}")
 
     # ===== SOURCE 3f: Vertical-aware industry directories =====
     # Map business_type → product fit, then pull from the right industry pack

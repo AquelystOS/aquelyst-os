@@ -378,6 +378,22 @@ def intelligence_to_lead_data(research_result, candidate):
         notes_parts.append(f"🐴 Est. stalls: {intel['estimated_stalls']}")
     if intel.get('services_offered'):
         notes_parts.append(f"🛠 Services: {', '.join(intel['services_offered'][:5])}")
+
+    # Industrial-intelligence enrichment: SIC/NAICS + burden tags + need-probability
+    try:
+        import intelligence_layer as _intel
+        intel_summary = _intel.format_intelligence_block(
+            business_type=intel.get('business_type'),
+            product_fit=product_fit,
+            match_score=intel.get('match_score', 50),
+            location_state=intel.get('state'),
+            has_size_signal=bool(intel.get('size_signal') or intel.get('estimated_stalls')),
+        )
+        if intel_summary:
+            notes_parts.append(f"🧭 Intelligence: {intel_summary}")
+    except Exception:
+        pass
+
     notes = "\n\n".join(notes_parts)
 
     return {
