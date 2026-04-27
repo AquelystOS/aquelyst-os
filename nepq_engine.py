@@ -388,27 +388,35 @@ def chat(messages, prefer='auto', extra_context=''):
     if extra_context:
         system = system + "\n\n## ADDITIONAL CONTEXT\n" + extra_context
 
+    last_err = ""
     if prefer == 'auto':
-        # Prefer Claude for nuanced sales conversations
         if api_keys.has_key('claude'):
             text, err = _claude_chat(messages, system_prompt=system)
             if text:
                 return text, 'claude'
+            last_err = err or last_err
         if api_keys.has_key('cerebras'):
             cerebras_msgs = [{"role": "system", "content": system}] + messages
             text, err = _cerebras_chat(cerebras_msgs)
             if text:
                 return text, 'cerebras'
-        return _template_fallback(messages), 'template'
+            last_err = err or last_err
+        # Encode the failure reason in the source string so UI can surface it
+        src = f"template (LLM down: {last_err[:120]})" if last_err else "template (no AI key)"
+        return _template_fallback(messages), src
 
     if prefer == 'claude':
         text, err = _claude_chat(messages, system_prompt=system)
-        return (text or _template_fallback(messages)), ('claude' if text else 'template')
+        if text:
+            return text, 'claude'
+        return _template_fallback(messages), f"template (Claude down: {(err or '')[:120]})"
 
     if prefer == 'cerebras':
         cerebras_msgs = [{"role": "system", "content": system}] + messages
         text, err = _cerebras_chat(cerebras_msgs)
-        return (text or _template_fallback(messages)), ('cerebras' if text else 'template')
+        if text:
+            return text, 'cerebras'
+        return _template_fallback(messages), f"template (Cerebras down: {(err or '')[:120]})"
 
     return _template_fallback(messages), 'template'
 
