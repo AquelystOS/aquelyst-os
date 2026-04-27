@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  aquelyst-hunter:
+    build: .
+    container_name: aquelyst-hunter
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./aquelyst_hunter.db:/app/aquelyst_hunter.db
+      - ./smtp_config.json:/app/smtp_config.json
+    restart: unless-stopped
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none

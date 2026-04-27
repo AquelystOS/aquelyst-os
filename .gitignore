@@ -1,0 +1,49 @@
+# ===== NEVER COMMIT THESE =====
+# Secrets / API keys
+api_keys.json
+smtp_config.json
+.streamlit/secrets.toml
+
+# Database (contains PII, leads, emails)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# State files (per-machine bot state)
+processed_message_ids.json
+autopilot_state.json
+autopilot_log.json
+auto_engagement_state.json
+auto_engagement_log.json
+email_responder_state.json
+email_responder_log.json
+ai_discovery_cache.json
+
+# User-editable lists (each user customizes locally)
+team_members.json
+product_catalog.json
+hunt_categories.json
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+
+# ===== Logs / temp =====
+*.log
+.DS_Store
+
+# ===== Editor =====
+.vscode/
+.idea/
+*.swp
+
+# ===== Streamlit cache =====
+.streamlit/cache

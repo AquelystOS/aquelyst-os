@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AqueLyst Contact Form</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="email"],
+        input[type="tel"],
+        input[type="number"],
+        select,
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        input[type="tel"]:focus,
+        input[type="number"]:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .required::after {
+            content: " *";
+            color: #e74c3c;
+        }
+
+        .form-group.full {
+            grid-column: 1 / -1;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .success-message {
+            display: none;
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .error-message {
+            display: none;
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .honeypot {
+            position: absolute;
+            left: -9999px;
+            opacity: 0;
+        }
+
+        .form-section-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #999;
+            text-transform: uppercase;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .form-section-title:first-child {
+            margin-top: 0;
+            border-top: none;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 25px;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 AqueLyst Duo Equine</h1>
+            <p>Let's talk about solving your barn odor and fly problems</p>
+        </div>
+
+        <form id="web3form" action="https://api.web3forms.com/submit" method="POST">
+            <!-- Web3Forms Access Key (AqueLyst) -->
+            <input type="hidden" name="access_key" value="993ac019-1740-49b2-866c-e1fb4cf4aa15">
+
+            <!-- Form Configuration -->
+            <input type="hidden" name="subject" value="🐴 New AqueLyst Duo Equine Lead">
+            <input type="hidden" name="from_name" value="AqueLyst.com Contact Form">
+            <input type="hidden" name="replyto" value="email">
+            <input type="hidden" name="redirect" value="">
+
+            <!-- Honeypot (spam prevention) -->
+            <input type="checkbox" name="botcheck" class="honeypot">
+
+            <!-- Contact Information -->
+            <div class="form-section-title">Your Information</div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="name" class="required">Your Name</label>
+                    <input type="text" id="name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="email" class="required">Email Address</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="phone">Phone Number</label>
+                    <input type="tel" id="phone" name="phone">
+                </div>
+                <div class="form-group">
+                    <label for="website">Website (optional)</label>
+                    <input type="text" id="website" name="website" placeholder="https://...">
+                </div>
+            </div>
+
+            <!-- Business Information -->
+            <div class="form-section-title">Your Business</div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="business_name" class="required">Business Name</label>
+                    <input type="text" id="business_name" name="business_name" required>
+                </div>
+                <div class="form-group">
+                    <label for="business_type" class="required">Business Type</label>
+                    <select id="business_type" name="business_type" required>
+                        <option value="">Select type...</option>
+                        <option value="horse barn">Horse Barn</option>
+                        <option value="stable">Stable</option>
+                        <option value="equestrian center">Equestrian Center</option>
+                        <option value="horse boarding facility">Horse Boarding Facility</option>
+                        <option value="trainer">Trainer / Training Facility</option>
+                        <option value="breeder">Breeder</option>
+                        <option value="rescue">Rescue</option>
+                        <option value="tack shop">Tack Shop</option>
+                        <option value="feed store">Feed Store</option>
+                        <option value="other equine business">Other Equine Business</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="city">City</label>
+                    <input type="text" id="city" name="city">
+                </div>
+                <div class="form-group">
+                    <label for="state">State / Province</label>
+                    <input type="text" id="state" name="state" placeholder="TX, CA, ON...">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="number_of_stalls">Number of Stalls (approximately)</label>
+                <input type="number" id="number_of_stalls" name="number_of_stalls" min="1" placeholder="e.g., 15">
+            </div>
+
+            <!-- Problem & Interest -->
+            <div class="form-section-title">Your Needs</div>
+
+            <div class="form-group">
+                <label for="main_problem" class="required">Main Problem You're Facing</label>
+                <select id="main_problem" name="main_problem" required>
+                    <option value="">Select primary concern...</option>
+                    <option value="Ammonia smell">Ammonia Smell</option>
+                    <option value="Flies and insects">Flies and Insects</option>
+                    <option value="Manure odor">Manure Odor</option>
+                    <option value="Overall barn air quality">Overall Barn Air Quality</option>
+                    <option value="Trailer odor">Trailer Odor</option>
+                    <option value="Multiple issues">Multiple Issues</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="product_interest" class="required">Which Product Interests You?</label>
+                <select id="product_interest" name="product_interest" required>
+                    <option value="">Select option...</option>
+                    <option value="Duo Equine for stalls">Duo Equine for Stalls</option>
+                    <option value="Duo Equine for trailers">Duo Equine for Trailers</option>
+                    <option value="Duo Equine for general barn use">Duo Equine for General Barn Use</option>
+                    <option value="Not sure yet">Not Sure Yet</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="message">Tell Us More About Your Situation</label>
+                <textarea id="message" name="message" placeholder="Describe your barn setup, the main challenges you face, and what you've tried so far..."></textarea>
+            </div>
+
+            <!-- Submit -->
+            <button type="submit">Send My Information →</button>
+
+            <!-- Messages -->
+            <div class="success-message" id="success">
+                ✓ Thank you! We'll be in touch soon.
+            </div>
+            <div class="error-message" id="error">
+                ✗ Something went wrong. Please try again.
+            </div>
+        </form>
+    </div>
+
+    <script>
+        const form = document.getElementById('web3form');
+        const successMsg = document.getElementById('success');
+        const errorMsg = document.getElementById('error');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData(form);
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    successMsg.style.display = 'block';
+                    errorMsg.style.display = 'none';
+                    form.reset();
+
+                    // Hide success message after 5 seconds
+                    setTimeout(() => {
+                        successMsg.style.display = 'none';
+                    }, 5000);
+                } else {
+                    throw new Error('Form submission failed');
+                }
+            } catch (error) {
+                errorMsg.style.display = 'block';
+                successMsg.style.display = 'none';
+                console.error('Error:', error);
+            }
+        });
+    </script>
+</body>
+</html>

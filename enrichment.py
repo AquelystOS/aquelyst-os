@@ -1,0 +1,208 @@
+"""Lead enrichment - auto-pull contact info from business websites."""
+
+import re
+import requests
+from urllib.parse import urlparse, urljoin
+
+EMAIL_PATTERN = re.compile(r'[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+PHONE_PATTERN = re.compile(r'(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})')
+
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+EXCLUDED_EMAILS = {
+    'example.com', 'sentry.io', 'sentry-next.wixpress.com',
+    'wixpress.com', 'godaddy.com', 'domain.com', 'email.com',
+    'png', 'jpg', 'gif', 'svg', 'webp'
+}
+
+CONTACT_PAGES = ['/contact', '/contact-us', '/about', '/about-us', '/get-in-touch', '/reach-us']
+
+
+def normalize_url(url):
+    """Ensure URL has scheme."""
+    if not url:
+        return None
+    url = url.strip()
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    return url
+
+
+def fetch_page(url, timeout=10):
+    """Fetch page content with timeout."""
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=timeout,
+            allow_redirects=True
+        )
+        if response.status_code == 200:
+            return response.text
+    except (requests.RequestException, requests.ConnectionError, requests.Timeout):
+        pass
+    return None
+
+
+def extract_emails(text, exclude_domains=None):
+    """Extract valid email addresses from text."""
+    if not text:
+        return []
+
+    exclude_domains = exclude_domains or EXCLUDED_EMAILS
+    emails = EMAIL_PATTERN.findall(text)
+
+    valid_emails = []
+    seen = set()
+
+    for email in emails:
+        email_lower = email.lower()
+        if email_lower in seen:
+            continue
+
+        # Skip excluded
+        skip = False
+        for exclude in exclude_domains:
+            if exclude in email_lower:
+                skip = True
+                break
+
+        if skip:
+            continue
+
+        # Skip image filenames mistakenly matching
+        if any(email_lower.endswith(ext) for ext in ['.png', '.jpg', '.gif', '.svg', '.webp']):
+            continue
+
+        seen.add(email_lower)
+        valid_emails.append(email)
+
+    return valid_emails
+
+
+def extract_phones(text):
+    """Extract US phone numbers."""
+    if not text:
+        return []
+
+    matches = PHONE_PATTERN.findall(text)
+    phones = []
+    seen = set()
+
+    for area, prefix, line in matches:
+        formatted = f"({area}) {prefix}-{line}"
+        if formatted not in seen:
+            seen.add(formatted)
+            phones.append(formatted)
+
+    return phones
+
+
+def find_social_links(text, base_url=None):
+    """Find social media URLs in HTML."""
+    if not text:
+        return {}
+
+    socials = {
+        'facebook': re.compile(r'(https?://(?:www\.)?facebook\.com/[a-zA-Z0-9._/-]+)', re.I),
+        'instagram': re.compile(r'(https?://(?:www\.)?instagram\.com/[a-zA-Z0-9._/-]+)', re.I),
+        'linkedin': re.compile(r'(https?://(?:www\.)?linkedin\.com/[a-zA-Z0-9._/-]+)', re.I),
+        'twitter': re.compile(r'(https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9._/-]+)', re.I),
+        'youtube': re.compile(r'(https?://(?:www\.)?youtube\.com/[a-zA-Z0-9._/@-]+)', re.I),
+    }
+
+    found = {}
+    for name, pattern in socials.items():
+        matches = pattern.findall(text)
+        if matches:
+            # Take first non-share-link result
+            for match in matches:
+                if 'sharer' not in match.lower() and 'share' not in match.lower():
+                    found[name] = match
+                    break
+
+    return found
+
+
+def enrich_from_website(website_url):
+    """
+    Visit a business website and extract:
+    - Email addresses
+    - Phone numbers
+    - Social media links
+    """
+    result = {
+        'emails': [],
+        'phones': [],
+        'socials': {},
+        'pages_checked': [],
+        'success': False
+    }
+
+    if not website_url:
+        return result
+
+    url = normalize_url(website_url)
+    if not url:
+        return result
+
+    parsed = urlparse(url)
+    base_domain = f"{parsed.scheme}://{parsed.netloc}"
+
+    # Check homepage and common contact pages
+    pages_to_check = [url] + [urljoin(base_domain, page) for page in CONTACT_PAGES]
+    pages_to_check = list(dict.fromkeys(pages_to_check))[:4]  # Limit to 4 pages
+
+    all_emails = set()
+    all_phones = set()
+    all_socials = {}
+
+    for page_url in pages_to_check:
+        html = fetch_page(page_url)
+        if html:
+            result['pages_checked'].append(page_url)
+            result['success'] = True
+
+            # Filter out emails matching the website domain that are wix/system noise
+            domain_filter = set(EXCLUDED_EMAILS)
+
+            for email in extract_emails(html, domain_filter):
+                all_emails.add(email)
+
+            for phone in extract_phones(html):
+                all_phones.add(phone)
+
+            socials = find_social_links(html, base_domain)
+            for name, link in socials.items():
+                if name not in all_socials:
+                    all_socials[name] = link
+
+    result['emails'] = sorted(list(all_emails))
+    result['phones'] = sorted(list(all_phones))
+    result['socials'] = all_socials
+
+    return result
+
+
+def get_best_email(emails, business_domain=None):
+    """Pick the best email from a list (prefer business domain, info@, contact@)."""
+    if not emails:
+        return None
+
+    if business_domain:
+        for email in emails:
+            if business_domain.lower() in email.lower():
+                return email
+
+    priority_prefixes = ['info@', 'contact@', 'hello@', 'sales@', 'admin@', 'office@']
+    for prefix in priority_prefixes:
+        for email in emails:
+            if email.lower().startswith(prefix):
+                return email
+
+    return emails[0] if emails else None
+
+
+def get_best_phone(phones):
+    """Pick the first phone from list."""
+    return phones[0] if phones else None

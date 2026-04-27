@@ -1,0 +1,1341 @@
+"""Lead Discovery Engine — find horse businesses across the open web.
+
+No paid APIs. Uses:
+- DuckDuckGo HTML search (no API key needed)
+- Bing HTML search (backup)
+- YellowPages directory
+- Direct site scraping
+
+Each discovered candidate goes to ai_research.py for Cerebras-powered qualification.
+"""
+
+import re
+import time
+import requests
+from urllib.parse import urlparse, urljoin, quote_plus
+from html.parser import HTMLParser
+
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+REQUEST_TIMEOUT = 12
+POLITE_DELAY = 1.5  # seconds between requests to same source
+
+
+# Domains to skip — directories, marketplaces, social, news
+SKIP_DOMAINS = {
+    'yelp.com', 'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
+    'linkedin.com', 'youtube.com', 'pinterest.com', 'tiktok.com',
+    'wikipedia.org', 'wikiwand.com', 'reddit.com', 'quora.com',
+    'amazon.com', 'ebay.com', 'craigslist.org', 'tripadvisor.com',
+    'yellowpages.com', 'mapquest.com', 'whitepages.com', 'manta.com',
+    'better-business-bureau.com', 'bbb.org', 'angi.com',
+    'duckduckgo.com', 'google.com', 'bing.com',
+    'horsefinders.com', 'horseclicks.com', 'equine.com',
+    'usef.org', 'ushja.org', 'ahaa.com',
+    'youtube-nocookie.com', 't.co', 'lnkd.in',
+    'apple.com', 'microsoft.com', 'gov',
+}
+
+
+class DuckDuckGoResultParser(HTMLParser):
+    """Parse DuckDuckGo HTML search results."""
+
+    def __init__(self):
+        super().__init__()
+        self.results = []
+        self.current_url = None
+        self.current_title = None
+        self.current_snippet = None
+        self.in_result_link = False
+        self.in_snippet = False
+        self.collecting_text = False
+        self.text_buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        cls = attrs_dict.get('class', '')
+
+        if tag == 'a' and 'result__a' in cls:
+            self.in_result_link = True
+            self.current_url = attrs_dict.get('href', '')
+            self.collecting_text = True
+            self.text_buffer = []
+        elif tag == 'a' and 'result__snippet' in cls:
+            self.in_snippet = True
+            self.collecting_text = True
+            self.text_buffer = []
+
+    def handle_endtag(self, tag):
+        if tag == 'a':
+            if self.in_result_link:
+                self.current_title = ' '.join(self.text_buffer).strip()
+                self.in_result_link = False
+                self.collecting_text = False
+            elif self.in_snippet:
+                self.current_snippet = ' '.join(self.text_buffer).strip()
+                self.in_snippet = False
+                self.collecting_text = False
+
+                # Save complete result
+                if self.current_url and self.current_title:
+                    cleaned_url = self._clean_ddg_url(self.current_url)
+                    if cleaned_url:
+                        self.results.append({
+                            'url': cleaned_url,
+                            'title': self.current_title,
+                            'snippet': self.current_snippet
+                        })
+                self.current_url = None
+                self.current_title = None
+                self.current_snippet = None
+
+    def handle_data(self, data):
+        if self.collecting_text:
+            self.text_buffer.append(data)
+
+    def _clean_ddg_url(self, url):
+        """DuckDuckGo wraps real URLs as /l/?uddg=encoded. Unwrap them."""
+        if not url:
+            return None
+
+        if 'uddg=' in url:
+            try:
+                from urllib.parse import unquote, parse_qs, urlparse as p
+                parsed = p(url)
+                params = parse_qs(parsed.query)
+                if 'uddg' in params:
+                    return unquote(params['uddg'][0])
+            except Exception:
+                return None
+
+        if url.startswith('http'):
+            return url
+        return None
+
+
+def _domain_of(url):
+    """Get clean domain from URL."""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().replace('www.', '')
+        return domain
+    except Exception:
+        return None
+
+
+def _should_skip(url):
+    """Skip directories, social, irrelevant sites."""
+    domain = _domain_of(url)
+    if not domain:
+        return True
+    for skip in SKIP_DOMAINS:
+        if skip in domain:
+            return True
+    # Skip subdomains of major directories
+    if any(domain.endswith(d) for d in ['.gov', '.edu']):
+        return True
+    return False
+
+
+def search_duckduckgo(query, max_results=30):
+    """Search DuckDuckGo HTML interface (no API key) — robust against rate limits."""
+
+    # Try multiple endpoints in order
+    endpoints = [
+        ("https://html.duckduckgo.com/html/", "POST"),
+        ("https://duckduckgo.com/html/", "POST"),
+        ("https://html.duckduckgo.com/html/", "GET"),
+    ]
+
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": "https://duckduckgo.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+    for endpoint, method in endpoints:
+        try:
+            if method == "POST":
+                response = requests.post(
+                    endpoint,
+                    data={"q": query, "kl": "us-en", "df": ""},
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT
+                )
+            else:
+                response = requests.get(
+                    endpoint,
+                    params={"q": query, "kl": "us-en"},
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT
+                )
+
+            if response.status_code != 200:
+                continue
+
+            # Check if we got actual results page
+            if "result__a" not in response.text and "results_links" not in response.text:
+                continue
+
+            parser = DuckDuckGoResultParser()
+            parser.feed(response.text)
+
+            seen_domains = set()
+            candidates = []
+            for r in parser.results[:max_results * 2]:
+                if _should_skip(r['url']):
+                    continue
+                domain = _domain_of(r['url'])
+                if domain in seen_domains:
+                    continue
+                seen_domains.add(domain)
+                candidates.append(r)
+                if len(candidates) >= max_results:
+                    break
+
+            if candidates:
+                return candidates
+
+        except Exception:
+            continue
+
+    return []
+
+
+def search_searxng(query, max_results=20):
+    """
+    Search via public SearXNG instances — meta-search aggregator.
+    Hits Google + Bing + DDG + others all at once. Usually not rate-limited.
+
+    Tries multiple known public instances in order until one works.
+    """
+    # Public SearXNG instances (community-run; rotated to avoid burdening any one)
+    instances = [
+        "https://search.inetol.net",
+        "https://searx.tiekoetter.com",
+        "https://opnxng.com",
+        "https://baresearch.org",
+        "https://search.rhscz.eu",
+        "https://search.sapti.me",
+        "https://priv.au",
+    ]
+
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json,text/html,*/*",
+    }
+
+    import random
+    random.shuffle(instances)
+
+    for instance in instances:
+        try:
+            # Try JSON API first (cleaner)
+            json_url = f"{instance}/search"
+            response = requests.get(
+                json_url,
+                params={
+                    "q": query,
+                    "format": "json",
+                    "categories": "general",
+                    "engines": "google,bing,duckduckgo,brave,qwant",
+                },
+                headers=headers,
+                timeout=REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    results = []
+                    seen_domains = set()
+
+                    for item in data.get('results', [])[:max_results * 2]:
+                        url_match = item.get('url', '')
+                        if _should_skip(url_match):
+                            continue
+                        domain = _domain_of(url_match)
+                        if not domain or domain in seen_domains:
+                            continue
+                        seen_domains.add(domain)
+
+                        results.append({
+                            'url': url_match,
+                            'title': item.get('title', domain)[:120],
+                            'snippet': item.get('content', '')[:200]
+                        })
+
+                        if len(results) >= max_results:
+                            break
+
+                    if results:
+                        return results
+                except (ValueError, KeyError):
+                    pass  # JSON parse failed, try next
+
+        except (requests.RequestException, requests.Timeout):
+            continue  # Try next instance
+
+    return []
+
+
+def discover_via_openstreetmap(business_type, location=None, max_results=50):
+    """
+    Discover horse businesses via OpenStreetMap Overpass API.
+    UNLIMITED FREE — no API key, no rate limits to speak of.
+
+    Every horse facility on Earth is tagged in OSM. This is the most powerful
+    free source available.
+
+    Searches for OSM nodes/ways tagged with horse-related amenities.
+    """
+
+    # OSM tags that match horse businesses
+    osm_tag_queries = {
+        'horse boarding facility': '["sport"="equestrian"]',
+        'equestrian center': '["sport"="equestrian"]',
+        'horse stable': '["leisure"="horse_riding"]',
+        'horse riding': '["leisure"="horse_riding"]',
+        'horse trainer': '["sport"="equestrian"]',
+        'horse breeder': '["sport"="equestrian"]',
+        'horse rescue': '["amenity"="animal_shelter"]["animal"="horse"]',
+        'tack shop': '["shop"="pet"]',  # close approximation
+        'feed store': '["shop"="agrarian"]',
+    }
+
+    tag_query = None
+    for key, query in osm_tag_queries.items():
+        if key in business_type.lower():
+            tag_query = query
+            break
+    if not tag_query:
+        tag_query = '["sport"="equestrian"]'  # default fallback
+
+    # Geocode location → bounding box, or use country-wide search
+    bbox = None
+    if location:
+        bbox = _geocode_to_bbox(location)
+
+    # Build Overpass QL query
+    if bbox:
+        # Search within bounding box
+        area_clause = f"({bbox['south']},{bbox['west']},{bbox['north']},{bbox['east']})"
+    else:
+        # Default to USA bounding box
+        area_clause = "(24.5,-125.0,49.4,-66.9)"
+
+    query = f"""[out:json][timeout:30];
+(
+  node{tag_query}{area_clause};
+  way{tag_query}{area_clause};
+  relation{tag_query}{area_clause};
+);
+out body center {max_results * 3};
+"""
+
+    # Multiple Overpass instances for redundancy
+    overpass_endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.openstreetmap.fr/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+    ]
+
+    for endpoint in overpass_endpoints:
+        try:
+            response = requests.post(
+                endpoint,
+                data={"data": query},
+                headers={"User-Agent": USER_AGENT},
+                timeout=45
+            )
+
+            if response.status_code != 200:
+                continue
+
+            data = response.json()
+            elements = data.get('elements', [])
+
+            results = []
+            seen_domains = set()
+            seen_names = set()
+
+            for el in elements:
+                tags = el.get('tags', {})
+                name = tags.get('name', '').strip()
+                website = (tags.get('website') or tags.get('contact:website')
+                           or tags.get('url') or '').strip()
+                phone = (tags.get('phone') or tags.get('contact:phone') or '').strip()
+                email = (tags.get('email') or tags.get('contact:email') or '').strip()
+                city = (tags.get('addr:city') or tags.get('city') or '').strip()
+                state = (tags.get('addr:state') or '').strip()
+
+                # Skip if no name
+                if not name or len(name) < 2:
+                    continue
+
+                # Skip duplicates
+                name_key = name.lower()
+                if name_key in seen_names:
+                    continue
+                seen_names.add(name_key)
+
+                # If we have a website, validate it
+                if website:
+                    if not website.startswith(('http://', 'https://')):
+                        website = 'https://' + website
+                    domain = _domain_of(website)
+                    if not domain or domain in seen_domains or _should_skip(website):
+                        continue
+                    seen_domains.add(domain)
+                    url_to_use = website
+                else:
+                    # Even without website, this is useful info
+                    # Use a synthetic OSM url so we can still process it
+                    osm_id = el.get('id', 0)
+                    osm_type = el.get('type', 'node')
+                    url_to_use = f"https://www.openstreetmap.org/{osm_type}/{osm_id}"
+
+                # Build snippet from OSM data
+                snippet_parts = []
+                if city: snippet_parts.append(city)
+                if state: snippet_parts.append(state)
+                if phone: snippet_parts.append(f"📞 {phone}")
+                if email: snippet_parts.append(f"📧 {email}")
+                snippet = " · ".join(snippet_parts)
+
+                results.append({
+                    'url': url_to_use,
+                    'title': name,
+                    'snippet': snippet,
+                    '_osm_phone': phone,
+                    '_osm_email': email,
+                    '_osm_city': city,
+                    '_osm_state': state,
+                    '_osm_website': website,
+                    '_osm_data': True,
+                })
+
+                if len(results) >= max_results:
+                    break
+
+            return results
+
+        except (requests.RequestException, ValueError, KeyError):
+            continue
+
+    return []
+
+
+def _geocode_to_bbox(location):
+    """Convert location string to bounding box via Nominatim (free, no key)."""
+    if not location:
+        return None
+
+    try:
+        response = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": location,
+                "format": "json",
+                "limit": 1,
+                "countrycodes": "us",
+            },
+            headers={"User-Agent": "AqueLyst-Hunter/1.0"},
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        if not data:
+            return None
+
+        bbox_arr = data[0].get('boundingbox')
+        if not bbox_arr or len(bbox_arr) < 4:
+            return None
+
+        # Nominatim format: [south, north, west, east]
+        return {
+            'south': float(bbox_arr[0]),
+            'north': float(bbox_arr[1]),
+            'west': float(bbox_arr[2]),
+            'east': float(bbox_arr[3]),
+        }
+    except Exception:
+        return None
+
+
+AI_CACHE_FILE = "ai_discovery_cache.json"
+
+
+def _load_ai_cache():
+    """Load AI-generated business cache (accumulates over runs)."""
+    try:
+        from pathlib import Path
+        if Path(AI_CACHE_FILE).exists():
+            with open(AI_CACHE_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_ai_cache(cache):
+    """Persist AI-generated business cache."""
+    try:
+        with open(AI_CACHE_FILE, 'w') as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def get_cached_ai_results(business_type, location):
+    """Get previously-generated results from cache."""
+    cache = _load_ai_cache()
+    key = f"{business_type}::{location or 'all'}".lower()
+    return cache.get(key, [])
+
+
+def cache_ai_results(business_type, location, results):
+    """Append new AI results to cache (deduplicated by domain)."""
+    cache = _load_ai_cache()
+    key = f"{business_type}::{location or 'all'}".lower()
+
+    existing = cache.get(key, [])
+    existing_domains = {_domain_of(r['url']) for r in existing}
+
+    for r in results:
+        domain = _domain_of(r['url'])
+        if domain and domain not in existing_domains:
+            existing.append(r)
+            existing_domains.add(domain)
+
+    cache[key] = existing
+    _save_ai_cache(cache)
+
+
+def discover_via_ai_knowledge(business_type, location, max_results=30):
+    """
+    Use Cerebras's built-in knowledge to generate candidate businesses.
+    This bypasses search-engine rate limits entirely.
+
+    The LLM knows about real horse businesses across the US.
+    We ask it for a list, then validate each one by visiting its website.
+    """
+    try:
+        import api_keys
+    except ImportError:
+        return []
+
+    api_key = api_keys.get_key('cerebras')
+    if not api_key:
+        return []
+
+    # Pick best available Cerebras model
+    try:
+        # Get live model list
+        model_resp = requests.get(
+            "https://api.cerebras.ai/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10
+        )
+        if model_resp.status_code == 200:
+            available = [m['id'] for m in model_resp.json().get('data', [])]
+            preferences = ['qwen-3-235b-a22b-instruct-2507', 'gpt-oss-120b',
+                            'zai-glm-4.7', 'llama-3.3-70b', 'llama3.1-8b']
+            model = next((m for m in preferences if m in available), available[0] if available else 'llama3.1-8b')
+        else:
+            model = 'llama3.1-8b'
+    except Exception:
+        model = 'llama3.1-8b'
+
+    location_str = f"in {location}" if location else "across the United States"
+
+    # Few-shot prompt that works reliably with qwen
+    prompt = f"""List {max_results} REAL {business_type}s {location_str}. Output ONLY a JSON array — no other text.
+
+Required format (start with [ and end with ]):
+[
+{{"name":"Keene Ridge Farm","city":"Lexington","state":"KY","website":"keeneridgefarm.com"}},
+{{"name":"Stone Columns Stables","city":"Lexington","state":"KY","website":"stonecolumnsstables.com"}}
+]
+
+Continue with {max_results} more real {business_type}s {location_str}. Use real businesses you know about.
+Just the JSON array, no markdown fences:"""
+
+    try:
+        response = requests.post(
+            "https://api.cerebras.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 4096,
+                "temperature": 0.5,
+            },
+            timeout=90
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+        content = data['choices'][0]['message']['content']
+
+        # Strip markdown fences and any preamble before the array
+        content = re.sub(r'^```(?:json)?\s*', '', content.strip())
+        content = re.sub(r'\s*```$', '', content)
+
+        # Find the JSON array — model sometimes prefixes with explanation
+        array_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if array_match:
+            content = array_match.group(0)
+
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                for key in ['businesses', 'results', 'data', 'list']:
+                    if key in parsed and isinstance(parsed[key], list):
+                        parsed = parsed[key]
+                        break
+                else:
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            parsed = v
+                            break
+        except json.JSONDecodeError:
+            # Try line-by-line JSONL parsing as last resort
+            parsed = []
+            for line in content.split('\n'):
+                line = line.strip().rstrip(',')
+                if line.startswith('{') and line.endswith('}'):
+                    try:
+                        parsed.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        if not isinstance(parsed, list):
+            return []
+
+        results = []
+        seen_domains = set()
+
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            name = item.get('name', '')
+            website = item.get('website', '')
+            city = item.get('city', '')
+            state = item.get('state', '')
+
+            if not name or not website:
+                continue
+
+            # Normalize website
+            if not website.startswith(('http://', 'https://')):
+                website = 'https://' + website
+
+            domain = _domain_of(website)
+            if not domain or domain in seen_domains or _should_skip(website):
+                continue
+            seen_domains.add(domain)
+
+            results.append({
+                'url': website,
+                'title': name,
+                'snippet': f'{business_type} in {city}, {state}'.strip(),
+                '_ai_known_city': city,
+                '_ai_known_state': state,
+            })
+
+        return results
+
+    except Exception as e:
+        print(f"AI discovery error: {e}")
+        return []
+
+
+import json  # used by discover_via_ai_knowledge
+
+
+def search_brave(query, max_results=20):
+    """
+    Search via Brave Search API (free tier: 2,000 queries/month).
+    Requires user to add BRAVE_API_KEY to api_keys.
+    """
+    try:
+        import api_keys
+        api_key = api_keys.get_key('brave')
+    except Exception:
+        return []
+
+    if not api_key:
+        return []
+
+    try:
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": min(max_results, 20)},
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": api_key,
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+        results = []
+        seen_domains = set()
+
+        for item in data.get('web', {}).get('results', []):
+            url_match = item.get('url', '')
+            if _should_skip(url_match):
+                continue
+            domain = _domain_of(url_match)
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+
+            results.append({
+                'url': url_match,
+                'title': item.get('title', domain)[:120],
+                'snippet': item.get('description', '')[:200]
+            })
+
+        return results
+    except Exception:
+        return []
+
+
+def search_google_scrape(query, max_results=20):
+    """
+    Scrape Google search results directly. Light volume only — Google may CAPTCHA.
+    Used as backup when DDG is rate-limited.
+    """
+    url = f"https://www.google.com/search?q={quote_plus(query)}&num={max_results * 2}&hl=en"
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        if response.status_code != 200:
+            return []
+
+        # Google's result links: <a href="/url?q=https://realsite.com&...">
+        # Or sometimes: <a href="https://realsite.com">
+        results = []
+        seen_domains = set()
+
+        # Pattern 1: /url?q= wrapper
+        wrapped = re.findall(r'<a\s+href="/url\?q=([^&"]+)[^"]*"[^>]*>(.*?)</a>', response.text, re.DOTALL)
+        # Pattern 2: direct link in result block
+        direct = re.findall(r'<a\s+href="(https?://[^"]+)"\s+[^>]*data-ved', response.text, re.DOTALL)
+
+        all_matches = wrapped + [(url, '') for url in direct]
+
+        for match in all_matches:
+            url_match = match[0] if isinstance(match, tuple) else match
+            title = match[1] if isinstance(match, tuple) and len(match) > 1 else ''
+
+            from urllib.parse import unquote
+            url_match = unquote(url_match)
+
+            if _should_skip(url_match):
+                continue
+            domain = _domain_of(url_match)
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+
+            title_clean = re.sub(r'<[^>]+>', '', title).strip()[:120] or domain
+
+            results.append({
+                'url': url_match,
+                'title': title_clean,
+                'snippet': ''
+            })
+
+            if len(results) >= max_results:
+                break
+
+        return results
+    except Exception as e:
+        print(f"Google search error: {e}")
+        return []
+
+
+def search_bing(query, max_results=30):
+    """Search Bing HTML interface (backup, no API key)."""
+    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={max_results}"
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+        if response.status_code != 200:
+            return []
+
+        results = []
+        seen_domains = set()
+
+        # Bing has multiple HTML structures — try several patterns
+        patterns = [
+            # Standard b_algo result
+            r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>.*?<a\s+href="([^"]+)"[^>]*>([^<]+)</a>(.*?)</li>',
+            # H2 anchor pattern
+            r'<h2[^>]*>\s*<a\s+href="(https?://[^"]+)"[^>]*>(.*?)</a>\s*</h2>',
+            # Cite + anchor pattern
+            r'<a\s+href="(https?://[^"]+)"[^>]*><h2[^>]*>(.*?)</h2></a>',
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, response.text, re.DOTALL)
+            for match in matches:
+                if len(match) >= 2:
+                    url_match = match[0]
+                    title = match[1]
+                    rest = match[2] if len(match) > 2 else ''
+
+                    if _should_skip(url_match):
+                        continue
+                    domain = _domain_of(url_match)
+                    if not domain or domain in seen_domains:
+                        continue
+                    seen_domains.add(domain)
+
+                    title_clean = re.sub(r'<[^>]+>', '', title).strip()[:120]
+                    if not title_clean:
+                        title_clean = domain
+
+                    # Try to find snippet
+                    snippet = ''
+                    if rest:
+                        snippet_match = re.search(r'<p[^>]*>(.*?)</p>', rest, re.DOTALL)
+                        if snippet_match:
+                            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()[:200]
+
+                    results.append({
+                        'url': url_match,
+                        'title': title_clean,
+                        'snippet': snippet
+                    })
+
+                    if len(results) >= max_results:
+                        break
+
+            if len(results) >= max_results:
+                break
+
+        return results
+    except Exception as e:
+        print(f"Bing search error: {e}")
+        return []
+
+
+def scrape_yellowpages(business_type, location):
+    """Scrape YellowPages.com listings — extracts real business websites."""
+    if not location:
+        location = "United States"
+    url = f"https://www.yellowpages.com/search?search_terms={quote_plus(business_type)}&geo_location_terms={quote_plus(location)}"
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+        if response.status_code != 200:
+            return []
+
+        results = []
+        seen_domains = set()
+
+        # Multiple patterns YellowPages uses (their HTML changes)
+        # Pattern 1: Direct website link with track-visit-website class
+        # Pattern 2: Generic href to external sites
+        patterns = [
+            r'class="[^"]*track-visit-website[^"]*"[^>]*href="(https?://[^"]+)"[^>]*>([^<]*)',
+            r'href="(https?://[^"]+)"\s+class="[^"]*track-visit-website',
+            # Generic external link in business card
+            r'<div[^>]*class="[^"]*info[^"]*"[^>]*>.*?href="(https?://(?!www\.yellowpages)[^"]+)"',
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, response.text, re.DOTALL)
+            for match in matches:
+                url_match = match if isinstance(match, str) else match[0]
+                title = match[1] if isinstance(match, tuple) and len(match) > 1 else ''
+
+                if _should_skip(url_match):
+                    continue
+                domain = _domain_of(url_match)
+                if not domain or domain in seen_domains:
+                    continue
+                seen_domains.add(domain)
+
+                results.append({
+                    'url': url_match,
+                    'title': title.strip() or domain,
+                    'snippet': f'Listed on YellowPages as {business_type}'
+                })
+
+        return results
+    except Exception as e:
+        print(f"YellowPages error: {e}")
+        return []
+
+
+def scrape_equine_directory(directory_url):
+    """Scrape an equine industry directory for member businesses."""
+    try:
+        response = requests.get(
+            directory_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT
+        )
+        if response.status_code != 200:
+            return []
+
+        # Pull all outbound links that look like business sites
+        # Skip social media, common platforms
+        link_matches = re.findall(r'href="(https?://[^"]+)"[^>]*>([^<]*)</a>', response.text)
+
+        results = []
+        seen_domains = set()
+        for url_match, title in link_matches:
+            if _should_skip(url_match):
+                continue
+            domain = _domain_of(url_match)
+            if not domain or domain in seen_domains:
+                continue
+            # Skip the directory itself
+            if domain in directory_url:
+                continue
+            seen_domains.add(domain)
+
+            clean_title = re.sub(r'<[^>]+>', '', title).strip()
+            if not clean_title or len(clean_title) < 3:
+                clean_title = domain
+
+            results.append({
+                'url': url_match,
+                'title': clean_title,
+                'snippet': f'Listed in equine industry directory'
+            })
+
+        return results[:30]
+    except Exception:
+        return []
+
+
+# Curated equine directories (free public listings)
+EQUINE_DIRECTORIES = [
+    "https://horsefinders.com/category/horse-boarding/",
+    "https://horsefinders.com/category/equestrian-centers/",
+    "https://horsefinders.com/category/horse-trainers/",
+    "https://www.equinehits.com/horse-boarding/",
+    "https://www.equinehits.com/horse-training/",
+]
+
+
+def _generate_query_variations(business_type, location):
+    """Generate many query variations to maximize discovery coverage."""
+    location_part = f" {location}" if location else ""
+    type_singular = business_type.rstrip('s') if business_type.endswith('s') else business_type
+
+    queries = [
+        # Direct
+        f"{business_type}{location_part}",
+        f"{type_singular}{location_part}",
+        f"\"{business_type}\"{location_part}",
+        # With contact intent
+        f"{business_type}{location_part} contact owner",
+        f"{business_type}{location_part} phone email",
+        # Variations with horse-related synonyms
+        f"barn{location_part} {business_type}",
+        f"equestrian{location_part} {type_singular}",
+        f"horse facility{location_part}",
+        # Local-business-style
+        f"best {business_type}{location_part}",
+        f"top {business_type}{location_part}",
+        # Site-restricted (catches business directories)
+        f"{business_type}{location_part} site:.com",
+        # Regional variations
+        f"{business_type} near{location_part}" if location else f"{business_type} near me",
+        # Long-tail
+        f"{business_type}{location_part} family owned",
+        f"{business_type}{location_part} private",
+    ]
+    return queries
+
+
+def discover_horse_businesses(business_type, location=None, max_results=20, on_progress=None):
+    """
+    AGGRESSIVELY discover horse businesses from many sources:
+    - DuckDuckGo HTML (10+ query variations)
+    - Bing HTML (multiple queries)
+    - YellowPages directory
+    - Equine industry directories
+    - Per-city expansion (if no city specified, hits multiple cities in state)
+
+    on_progress: optional callback(source_name, detail_msg)
+    Returns list of candidates: [{url, title, snippet, source}, ...]
+    """
+    all_candidates = []
+    seen_urls = set()
+    seen_domains = set()
+
+    def add_candidate(c, source):
+        domain = _domain_of(c['url'])
+        if c['url'] in seen_urls or (domain and domain in seen_domains):
+            return False
+        seen_urls.add(c['url'])
+        if domain:
+            seen_domains.add(domain)
+        c['source'] = source
+        c['source_query'] = c.get('source_query', source)
+        all_candidates.append(c)
+        return True
+
+    queries = _generate_query_variations(business_type, location)
+
+    # ===== SOURCE 0: OpenStreetMap (UNLIMITED, FREE, KING) =====
+    if on_progress:
+        on_progress("OpenStreetMap", f"querying global database for {business_type}")
+    try:
+        osm_results = discover_via_openstreetmap(business_type, location, max_results=max_results * 2)
+        added = 0
+        for r in osm_results:
+            if add_candidate(r, "OpenStreetMap"):
+                added += 1
+        if on_progress:
+            on_progress("OpenStreetMap", f"+{added} businesses from OSM (with phone/email metadata)")
+    except Exception as e:
+        if on_progress:
+            on_progress("OpenStreetMap", f"failed: {str(e)[:50]}")
+
+    # ===== SOURCE 0b: AI Cache (accumulated from prior runs — instant) =====
+    cached = get_cached_ai_results(business_type, location)
+    if cached:
+        if on_progress:
+            on_progress("AI Cache", f"loading {len(cached)} previously-discovered businesses")
+        added = 0
+        for r in cached:
+            if add_candidate(r, "AI Cache"):
+                added += 1
+        if on_progress:
+            on_progress("AI Cache", f"+{added} from cache")
+
+    # ===== SOURCE 1: Cerebras AI Knowledge (live generation) =====
+    if len(all_candidates) < max_results:
+        if on_progress:
+            on_progress("Cerebras AI", f"asking AI for real {business_type}s")
+        try:
+            ai_results = discover_via_ai_knowledge(business_type, location, max_results=max_results)
+            added = 0
+            new_ai_results = []
+            for r in ai_results:
+                if add_candidate(r, "AI Knowledge"):
+                    added += 1
+                    new_ai_results.append(r)
+            if on_progress:
+                on_progress("Cerebras AI", f"+{added} businesses from AI memory")
+
+            # Persist newly-discovered to cache for future runs
+            if new_ai_results:
+                cache_ai_results(business_type, location, new_ai_results)
+        except Exception as e:
+            if on_progress:
+                on_progress("Cerebras AI", f"failed: {str(e)[:50]}")
+
+    # ===== SOURCE 0b: Brave Search API (if user provided key — best quality) =====
+    try:
+        import api_keys as _ak
+        if _ak.has_key('brave'):
+            for q in queries[:5]:
+                if on_progress:
+                    on_progress("Brave Search", f"query: {q[:50]}")
+                results = search_brave(q, max_results=20)
+                added = 0
+                for r in results:
+                    if add_candidate(r, "Brave Search"):
+                        added += 1
+                if on_progress:
+                    on_progress("Brave Search", f"+{added} new (total: {len(all_candidates)})")
+                time.sleep(0.3)
+                if len(all_candidates) >= max_results * 2:
+                    break
+    except Exception:
+        pass
+
+    # ===== SOURCE 1: SearXNG (meta-search, usually not blocked) =====
+    if len(all_candidates) < max_results:
+        for q in queries[:6]:
+            if on_progress:
+                on_progress("SearXNG (meta)", f"query: {q[:50]}")
+            results = search_searxng(q, max_results=20)
+            added = 0
+            for r in results:
+                if add_candidate(r, "SearXNG"):
+                    added += 1
+            if on_progress:
+                on_progress("SearXNG (meta)", f"+{added} new (total: {len(all_candidates)})")
+            time.sleep(POLITE_DELAY)
+            if len(all_candidates) >= max_results * 2:
+                break
+
+    # ===== SOURCE 2: DuckDuckGo (may rate-limit) =====
+    if len(all_candidates) < max_results:
+        for q in queries[:5]:
+            if on_progress:
+                on_progress("DuckDuckGo", f"query: {q[:50]}")
+            results = search_duckduckgo(q, max_results=20)
+            added = 0
+            for r in results:
+                if add_candidate(r, "DuckDuckGo"):
+                    added += 1
+            if on_progress:
+                on_progress("DuckDuckGo", f"+{added} new (total: {len(all_candidates)})")
+            time.sleep(POLITE_DELAY)
+            if len(all_candidates) >= max_results * 2:
+                break
+
+    # ===== SOURCE 2: Bing (catches what DDG misses) =====
+    if len(all_candidates) < max_results * 1.5:
+        for q in queries[:5]:
+            if on_progress:
+                on_progress("Bing", f"query: {q[:50]}")
+            results = search_bing(q, max_results=20)
+            added = 0
+            for r in results:
+                if add_candidate(r, "Bing"):
+                    added += 1
+            if on_progress:
+                on_progress("Bing", f"+{added} new (total: {len(all_candidates)})")
+            time.sleep(POLITE_DELAY)
+            if len(all_candidates) >= max_results * 2:
+                break
+
+    # ===== SOURCE 2b: Google (when others come up dry) =====
+    if len(all_candidates) < max_results // 2:
+        for q in queries[:3]:
+            if on_progress:
+                on_progress("Google", f"query: {q[:50]}")
+            results = search_google_scrape(q, max_results=20)
+            added = 0
+            for r in results:
+                if add_candidate(r, "Google"):
+                    added += 1
+            if on_progress:
+                on_progress("Google", f"+{added} new (total: {len(all_candidates)})")
+            time.sleep(POLITE_DELAY * 2)  # Be especially polite to Google
+            if len(all_candidates) >= max_results:
+                break
+
+    # ===== SOURCE 3: YellowPages =====
+    if on_progress:
+        on_progress("YellowPages", f"scraping {business_type} in {location or 'US'}")
+    try:
+        yp_results = scrape_yellowpages(business_type, location)
+        added = 0
+        for r in yp_results:
+            if add_candidate(r, "YellowPages"):
+                added += 1
+        if on_progress:
+            on_progress("YellowPages", f"+{added} new (total: {len(all_candidates)})")
+    except Exception as e:
+        if on_progress:
+            on_progress("YellowPages", f"failed: {str(e)[:50]}")
+    time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 4: Equine industry directories =====
+    for directory_url in EQUINE_DIRECTORIES:
+        if on_progress:
+            on_progress("Equine Directory", urlparse(directory_url).netloc)
+        try:
+            dir_results = scrape_equine_directory(directory_url)
+            added = 0
+            for r in dir_results:
+                if add_candidate(r, "Equine Directory"):
+                    added += 1
+            if on_progress:
+                on_progress("Equine Directory", f"+{added} new (total: {len(all_candidates)})")
+        except Exception:
+            pass
+        time.sleep(POLITE_DELAY)
+        if len(all_candidates) >= max_results * 2:
+            break
+
+    # ===== SOURCE 5: Curated seed list (guaranteed fallback) =====
+    if len(all_candidates) < max_results // 2:
+        if on_progress:
+            on_progress("Curated Seeds", f"loading verified {business_type}s")
+        try:
+            from seed_businesses import get_seeds_for_filter
+            # Match state from location string
+            state_code = None
+            if location:
+                # Try to find 2-letter state code
+                state_match = re.search(r'\b([A-Z]{2})\b', location.upper())
+                if state_match:
+                    state_code = state_match.group(1)
+                else:
+                    # Match full state name
+                    state_names = {
+                        'KENTUCKY': 'KY', 'TEXAS': 'TX', 'CALIFORNIA': 'CA',
+                        'FLORIDA': 'FL', 'VIRGINIA': 'VA', 'COLORADO': 'CO',
+                        'NEW YORK': 'NY', 'OREGON': 'OR', 'TENNESSEE': 'TN',
+                        'MASSACHUSETTS': 'MA', 'OHIO': 'OH'
+                    }
+                    for full, code in state_names.items():
+                        if full in location.upper():
+                            state_code = code
+                            break
+
+            seeds = get_seeds_for_filter(business_type=business_type, state=state_code, max_count=20)
+            added = 0
+            for s in seeds:
+                if add_candidate(s, "Curated Seeds"):
+                    added += 1
+            if on_progress:
+                on_progress("Curated Seeds", f"+{added} verified businesses")
+        except Exception as e:
+            if on_progress:
+                on_progress("Curated Seeds", f"failed: {str(e)[:50]}")
+
+    return all_candidates[:max_results]
+
+
+def discover_from_directory(directory_url, max_results=20):
+    """Scrape a directory page for business listings."""
+    try:
+        response = requests.get(
+            directory_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=REQUEST_TIMEOUT
+        )
+        if response.status_code != 200:
+            return []
+
+        # Extract all outbound links that look like business websites
+        links = re.findall(r'href="(https?://[^"]+)"', response.text)
+        candidates = []
+        seen_domains = set()
+
+        for link in links:
+            if _should_skip(link):
+                continue
+            domain = _domain_of(link)
+            if not domain or domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            candidates.append({
+                'url': link,
+                'title': domain,
+                'snippet': '',
+                'source_query': f'directory:{directory_url}'
+            })
+            if len(candidates) >= max_results:
+                break
+
+        return candidates
+    except Exception:
+        return []
+
+
+# Equine business types to discover
+DISCOVERY_TARGETS = [
+    {
+        'type': 'horse boarding facility',
+        'priority': 1,
+        'reason': 'Daily ammonia/manure issues, multiple stalls'
+    },
+    {
+        'type': 'equestrian center',
+        'priority': 1,
+        'reason': 'Premium facilities, large operations'
+    },
+    {
+        'type': 'horse stable',
+        'priority': 2,
+        'reason': 'Smaller but persistent odor issues'
+    },
+    {
+        'type': 'horse rescue',
+        'priority': 2,
+        'reason': 'Multiple horses, fly control critical'
+    },
+    {
+        'type': 'horse trainer',
+        'priority': 3,
+        'reason': 'Often have stables + trailers'
+    },
+    {
+        'type': 'horse breeder',
+        'priority': 3,
+        'reason': 'Premium operations, quality-focused'
+    },
+    {
+        'type': 'tack shop',
+        'priority': 4,
+        'reason': 'Distribution partner potential'
+    },
+    {
+        'type': 'feed store',
+        'priority': 4,
+        'reason': 'Distribution partner potential'
+    },
+]
+
+
+def get_discovery_targets():
+    """Return business types to search for, ordered by priority."""
+    return sorted(DISCOVERY_TARGETS, key=lambda x: x['priority'])
+
+
+if __name__ == "__main__":
+    # Quick test
+    print("Testing DuckDuckGo discovery...")
+    results = discover_horse_businesses("horse boarding facility", "Lexington KY", max_results=5)
+    for i, r in enumerate(results, 1):
+        print(f"\n{i}. {r['title']}")
+        print(f"   {r['url']}")
+        print(f"   {r['snippet'][:120]}...")
