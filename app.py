@@ -522,7 +522,8 @@ def show_admin_console():
     )
 
     sections = st.tabs(["👥 Team", "🛡 Admins", "🔑 API Keys",
-                          "🧠 Aqua Memory", "💬 Chat Logs", "📊 Usage"])
+                          "🧠 Aqua Memory", "🗑 Junk Patterns",
+                          "💬 Chat Logs", "📊 Usage"])
 
     with sections[0]:
         _admin_team_section()
@@ -533,9 +534,49 @@ def show_admin_console():
     with sections[3]:
         _admin_memory_section()
     with sections[4]:
-        _admin_chatlogs_section()
+        _admin_junk_section()
     with sections[5]:
+        _admin_chatlogs_section()
+    with sections[6]:
         _admin_usage_section()
+
+
+def _admin_junk_section():
+    """Show what junk patterns Aqua has learned from team dismissals."""
+    st.markdown("##### What Aqua learned from your 'Not real' clicks")
+    st.caption("Each pattern blocks future inbound messages that match. "
+                "Remove a pattern if it's causing false positives.")
+    signals = database.get_junk_signals(limit=200)
+    if not signals:
+        st.caption("_No junk patterns yet. Hit '🗑 Not real' on spam in the Inbox tab "
+                    "to teach Aqua._")
+        return
+
+    by_kind = {}
+    for s in signals:
+        by_kind.setdefault(s['kind'], []).append(s)
+
+    for kind in ('sender_domain', 'sender_email', 'body_phrase', 'subject_keyword'):
+        items = by_kind.get(kind, [])
+        if not items:
+            continue
+        kind_label = {
+            'sender_domain': 'Blocked sender domains',
+            'sender_email': 'Blocked sender emails',
+            'body_phrase': 'Spam body phrases',
+            'subject_keyword': 'Suspicious subject keywords (need 2+ to flag)',
+        }[kind]
+        st.markdown(f"**{kind_label}**")
+        for s in items:
+            c1, c2, c3 = st.columns([4, 1, 1])
+            c1.markdown(f"`{s['value']}`")
+            c2.caption(f"matched {s.get('match_count') or 0}× · "
+                        f"learned {s['created_at'][:10]}")
+            if c3.button("🗑", key=f"junk_pat_rm_{s['id']}",
+                          help="Remove this pattern"):
+                database.delete_junk_signal(s['id'])
+                st.rerun()
+        st.markdown("")
 
 
 def _admin_admins_section():
@@ -3513,6 +3554,22 @@ def _show_split_received_replies():
         for m in external_msgs[:30]:
             _render_inbound_card(m, is_team=False)
 
+    # Dismissed messages (junk) — undo if needed
+    junk_inbound = [m for m in database.get_all_inbound(limit=100, include_junk=True)
+                    if m['is_junk']]
+    if junk_inbound:
+        with st.expander(f"🗑 Dismissed as junk ({len(junk_inbound)}) — undo if you change your mind"):
+            for m in junk_inbound[:30]:
+                jc1, jc2, jc3 = st.columns([4, 2, 1])
+                jc1.markdown(
+                    f"**{m['business_name'] or m['from_name'] or m['from_email']}**  \n"
+                    f"_{(m['subject'] or '')[:80]}_"
+                )
+                jc2.caption(f"Reason: {m['junk_reason'] or 'manual dismiss'}")
+                if jc3.button("Restore", key=f"unjunk_{m['id']}"):
+                    database.unmark_inbound_junk(m['id'])
+                    st.rerun()
+
     st.markdown("---")
 
     # ===== TEAM REPLIES (separate box) =====
@@ -3549,6 +3606,19 @@ def _render_inbound_card(msg, is_team=False):
     border_color = '#3b82f6' if is_team else '#1a5f3f'
 
     with st.container():
+        # Inline header row with quick "Not real" dismiss button so junk can be
+        # killed without expanding (only for external messages — team is always real)
+        if not is_team:
+            head = st.columns([5, 1])
+            head[0].markdown(f"📨  **{biz}** · _{from_email}_  ·  {received}")
+            if head[1].button("🗑 Not real", key=f"junk_{msg['id']}",
+                                help="Dismiss as spam/non-prospect. Aqua learns "
+                                     "from this and auto-flags similar future messages.",
+                                use_container_width=True):
+                database.mark_inbound_junk(msg['id'], reason="Manual dismiss from inbox")
+                st.toast("✅ Dismissed. Aqua learned the pattern.", icon="🧠")
+                st.rerun()
+
         # Click to expand the full conversation
         with st.expander(f"📨  **{biz}** · {received}  ·  _{subject[:60]}_"):
             st.html(

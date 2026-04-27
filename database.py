@@ -118,13 +118,37 @@ def init_db():
         summary TEXT,
         draft_response_id INTEGER,
         read_status INTEGER DEFAULT 0,
+        is_junk INTEGER DEFAULT 0,
+        junk_reason TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (lead_id) REFERENCES leads(id),
         FOREIGN KEY (draft_response_id) REFERENCES outreach_drafts(id)
     )''')
 
+    # Best-effort schema upgrade for older DBs that pre-date is_junk
+    for col_name, col_def in [('is_junk', 'INTEGER DEFAULT 0'),
+                                ('junk_reason', 'TEXT')]:
+        try:
+            c.execute(f'ALTER TABLE inbound_messages ADD COLUMN {col_name} {col_def}')
+        except sqlite3.OperationalError:
+            pass
+
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_received ON inbound_messages(received_at DESC)')
+
+    # Junk-pattern memory — every "not a real prospect" dismissal teaches the system.
+    # Future inbound from matching domains/keywords auto-marks as junk.
+    c.execute('''CREATE TABLE IF NOT EXISTS junk_signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source_msg_id INTEGER,
+        reason TEXT,
+        match_count INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(kind, value)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_junk_signal_kind ON junk_signals(kind)')
 
     # Aqua's persistent chat memory — per team-member, survives across sessions/redeploys
     c.execute('''CREATE TABLE IF NOT EXISTS aqua_chat_log (
@@ -517,18 +541,30 @@ def provider_log_all():
 def save_inbound_message(lead_id, from_email, from_name, to_email, subject, body,
                          received_at, message_id_rfc, intent=None, sentiment=None,
                          summary=None, draft_response_id=None):
-    """Save an incoming email to the inbound_messages table."""
+    """Save an incoming email to the inbound_messages table.
+    Auto-flags as junk if it matches a learned junk signal."""
+    # Check if this matches a learned junk pattern BEFORE saving
+    is_junk_flag = 0
+    junk_reason = None
+    try:
+        is_junk_match, signal = is_likely_junk(from_email, subject, body)
+        if is_junk_match:
+            is_junk_flag = 1
+            junk_reason = f"Auto-flagged: matched {signal}"
+    except Exception:
+        pass
+
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute('''INSERT INTO inbound_messages
                      (lead_id, from_email, from_name, to_email, subject, body,
                       received_at, message_id_rfc, intent, sentiment, summary,
-                      draft_response_id)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                      draft_response_id, is_junk, junk_reason)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (lead_id, from_email, from_name, to_email, subject, body,
                    received_at, message_id_rfc, intent, sentiment, summary,
-                   draft_response_id))
+                   draft_response_id, is_junk_flag, junk_reason))
         conn.commit()
         new_id = c.lastrowid
         conn.close()
@@ -545,6 +581,157 @@ def link_inbound_to_draft(inbound_id, draft_id):
     c = conn.cursor()
     c.execute('UPDATE inbound_messages SET draft_response_id = ? WHERE id = ?',
               (draft_id, inbound_id))
+    conn.commit()
+    conn.close()
+
+
+def mark_inbound_junk(msg_id, reason=None):
+    """Flag an inbound message as junk + extract pattern signals so future
+    similar messages get auto-flagged."""
+    conn = get_connection()
+    c = conn.cursor()
+
+    # Pull the message so we can extract junk-pattern signals
+    c.execute('SELECT * FROM inbound_messages WHERE id = ?', (msg_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return False
+    msg = dict(row)
+
+    # Mark this specific message as junk
+    c.execute('UPDATE inbound_messages SET is_junk = 1, junk_reason = ? WHERE id = ?',
+              ((reason or 'Manually dismissed')[:200], msg_id))
+
+    # Learn pattern signals for future auto-detection
+    signals = _extract_junk_signals(msg, reason)
+    for kind, value in signals:
+        try:
+            c.execute('''INSERT INTO junk_signals (kind, value, source_msg_id, reason)
+                         VALUES (?,?,?,?)
+                         ON CONFLICT(kind, value)
+                         DO UPDATE SET match_count = COALESCE(match_count, 0) + 1''',
+                      (kind, value, msg_id, (reason or '')[:200]))
+        except Exception:
+            pass
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def unmark_inbound_junk(msg_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('UPDATE inbound_messages SET is_junk = 0, junk_reason = NULL WHERE id = ?',
+              (msg_id,))
+    conn.commit()
+    conn.close()
+
+
+def _extract_junk_signals(msg, reason=None):
+    """From an inbound message, distill 1-N signals other messages can match against:
+    - sender_domain: bounce future emails from this domain
+    - sender_email: exact match
+    - subject_keyword: low-frequency tokens from the subject (proper nouns, brand names)
+    """
+    signals = []
+    from_email = (msg.get('from_email') or '').lower()
+    if from_email:
+        signals.append(('sender_email', from_email))
+        domain = from_email.split('@', 1)[-1] if '@' in from_email else ''
+        if domain and '.' in domain and domain not in (
+            'gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com',
+            'hotmail.com', 'aol.com', 'protonmail.com', 'live.com'):
+            signals.append(('sender_domain', domain))
+
+    subject = (msg.get('subject') or '').lower()
+    body_preview = (msg.get('body') or '').lower()[:600]
+
+    # Tokenize meaningful keywords (length 4+, alphabetic) from subject
+    import re as _re
+    subj_tokens = [t for t in _re.findall(r'[a-z][a-z0-9\-]{3,}', subject)
+                   if t not in {'this', 'that', 'with', 'from', 'your',
+                                  'have', 'will', 'about', 'just', 'only',
+                                  'best', 'free', 'time', 'over', 'when',
+                                  'into', 'them', 'they', 'what', 'been',
+                                  'were', 'some', 'than', 'more', 'like',
+                                  'subject', 'email'}]
+    # Top 3 distinctive tokens from subject as signals
+    for tok in subj_tokens[:3]:
+        signals.append(('subject_keyword', tok))
+
+    # Common spam/vendor-pitch phrases in body
+    spam_phrases = [
+        'seo services', 'rank higher', 'web design', 'leads guaranteed',
+        'increase your sales', 'verified leads', 'unsubscribe',
+        'limited time offer', 'crypto', 'bitcoin', 'ethereum',
+        'investment opportunity', 'business proposal', 'collaborate',
+        'guest post', 'backlink', 'website audit', 'lead generation',
+        'partnership opportunity', 'we noticed your website',
+    ]
+    for phrase in spam_phrases:
+        if phrase in body_preview or phrase in subject:
+            signals.append(('body_phrase', phrase))
+
+    return list(set(signals))
+
+
+def is_likely_junk(from_email, subject, body):
+    """Check if an incoming message matches any learned junk signal.
+    Returns (True, matched_signal) or (False, None)."""
+    if not from_email and not subject:
+        return False, None
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Exact sender_email match
+        if from_email:
+            c.execute('SELECT id FROM junk_signals WHERE kind = ? AND value = ?',
+                      ('sender_email', from_email.lower()))
+            if c.fetchone():
+                return True, f"sender_email:{from_email}"
+            # Domain match
+            domain = from_email.split('@', 1)[-1].lower() if '@' in from_email else ''
+            if domain:
+                c.execute('SELECT id FROM junk_signals WHERE kind = ? AND value = ?',
+                          ('sender_domain', domain))
+                if c.fetchone():
+                    return True, f"sender_domain:{domain}"
+
+        # Body phrase match
+        body_l = (body or '').lower()
+        c.execute('SELECT value FROM junk_signals WHERE kind = ?', ('body_phrase',))
+        for row in c.fetchall():
+            if row['value'] in body_l or row['value'] in (subject or '').lower():
+                return True, f"body_phrase:{row['value']}"
+
+        # Subject keyword: requires 2+ matching keywords to be conservative
+        subj_l = (subject or '').lower()
+        c.execute('SELECT value FROM junk_signals WHERE kind = ?', ('subject_keyword',))
+        sk_rows = [r['value'] for r in c.fetchall()]
+        matches = [v for v in sk_rows if v in subj_l]
+        if len(matches) >= 2:
+            return True, f"subject_keywords:{','.join(matches[:3])}"
+    finally:
+        conn.close()
+    return False, None
+
+
+def get_junk_signals(limit=200):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM junk_signals ORDER BY match_count DESC, id DESC LIMIT ?',
+              (limit,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_junk_signal(signal_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM junk_signals WHERE id = ?', (signal_id,))
     conn.commit()
     conn.close()
 
@@ -570,14 +757,17 @@ def get_inbound_by_draft(draft_id):
     return row
 
 
-def get_all_inbound(limit=100):
-    """Get all incoming messages, newest first, joined with lead info."""
+def get_all_inbound(limit=100, include_junk=False):
+    """Get all incoming messages, newest first, joined with lead info.
+    By default filters out junk-flagged messages; set include_junk=True to see them."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''SELECT i.*, l.business_name, l.contact_name, l.lead_score
-                 FROM inbound_messages i
-                 LEFT JOIN leads l ON i.lead_id = l.id
-                 ORDER BY i.received_at DESC LIMIT ?''', (limit,))
+    where = "" if include_junk else "WHERE COALESCE(i.is_junk, 0) = 0"
+    c.execute(f'''SELECT i.*, l.business_name, l.contact_name, l.lead_score
+                  FROM inbound_messages i
+                  LEFT JOIN leads l ON i.lead_id = l.id
+                  {where}
+                  ORDER BY i.received_at DESC LIMIT ?''', (limit,))
     rows = c.fetchall()
     conn.close()
     return rows
