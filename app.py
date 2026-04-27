@@ -543,9 +543,24 @@ def _admin_admins_section():
     import team as _team
     st.markdown("##### Who can access this Admin Console")
 
-    if not is_root_admin():
-        st.warning("🔒 Only the root admin (Joseph) can grant or revoke admin access. "
-                    "You can see who's an admin but can't change the list.")
+    # Diagnostic: show who the system thinks is connected right now
+    current = _team.get_current_user()
+    detected_email = (current.get('email') or '').lower() or '(none — no email connected)'
+    is_root = is_root_admin()
+    st.caption(
+        f"You are connected as: **`{detected_email}`** · "
+        f"Root admin status: **{'✅ YES' if is_root else '❌ NO'}** · "
+        f"Root admin email is hardcoded to: `{ROOT_ADMIN_EMAIL}`"
+    )
+
+    if not is_root:
+        st.warning(
+            "🔒 Only the root admin (Joseph) can grant or revoke admin access. "
+            f"Your connected email is `{detected_email}` which doesn't match the root admin "
+            f"email `{ROOT_ADMIN_EMAIL}`.  \n\n"
+            "**To fix:** go to **Setup → 📧 Email**, disconnect any other email, "
+            f"and connect `{ROOT_ADMIN_EMAIL}` instead."
+        )
         granted = database.admin_list()
         st.markdown(f"**Root admin:** `{ROOT_ADMIN_EMAIL}`")
         if granted:
