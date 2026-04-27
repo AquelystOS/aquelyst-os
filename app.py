@@ -2193,97 +2193,136 @@ def show_sales_bot():
 
 
 def _show_freeform_chat():
-    """Open chat for the team to talk to Aqua, share ideas, get advice.
-    Aqua learns from every conversation and tries to get better.
+    """Live chat with Aqua. Per-user persistent memory survives across sessions.
+    Hit Enter to send. Shift+Enter for newline.
     """
-    st.markdown("### Talk to Aqua")
-    st.caption("Share ideas, ask questions, brainstorm sales angles. Aqua remembers the team's "
-                "conversations and tries to get smarter every day.")
+    import team as _team
+    current = _team.get_current_user()
+    user_email = (current.get('email') or '').lower()
+    user_first = (current.get('name') or 'there').split()[0]
 
-    # Initialize freeform chat history
-    if 'freeform_chat' not in st.session_state:
-        st.session_state.freeform_chat = []
+    if not user_email:
+        st.warning("Connect your email in Setup → 📧 Email so Aqua can remember your conversations.")
 
-    # Quick prompts — categorized
-    st.markdown("**Quick prompts:**")
+    st.markdown(f"### Chat with Aqua — _hey {user_first}_")
+    facts = database.aqua_get_user_facts(user_email, limit=5) if user_email else []
+    if facts:
+        with st.expander(f"🧠 What Aqua remembers about you ({len(facts)} notes)"):
+            for f in facts:
+                st.caption(f"• {f['fact']}")
+            st.caption("Aqua persists corrections + intel across sessions.")
+    st.caption("Aqua is your teammate, not your assistant. She runs deals, drafts outreach, "
+                "handles inbound. Coach her here — she remembers per-person.")
+
+    # Pull persistent history (DB-backed, oldest-first)
+    history = database.aqua_get_chat_history(user_email, limit=40) if user_email else []
+
+    # Quick prompts
     suggestions = [
-        ("📈 What's working in our pipeline?", "Look at our live CRM snapshot and tell me: which lead source is converting best, what intents we're seeing this week, and one concrete thing we should do MORE of."),
-        ("🎯 Roleplay 'too expensive'", "Roleplay: You're a horse barn owner objecting to the price of Duo Equine. Hit me with it like a real owner would. I'll respond NEPQ-style."),
+        ("📈 What's working in pipeline?", "Look at our live CRM snapshot and tell me: which lead source is converting best, what intents we're seeing this week, and one concrete thing we should do MORE of."),
+        ("🎯 Roleplay 'too expensive'", "Roleplay: You're a horse barn owner objecting to the price of Duo Equine. Hit me with it like a real owner would."),
         ("💡 5 lead sources I haven't tried", "Give me 5 creative places to find prospects across our different verticals (horse, pet, commercial, fleet, residential) that aren't obvious."),
-        ("🧠 Pick the right framework", "I have a prospect that's been quiet for 14 days. Which sales framework should I use to re-engage and why?"),
-        ("📝 Critique my last 3 sent emails", "Pull our 3 most recent sent emails and critique them — what's working, what's salesy, what to fix."),
-        ("🐴 Equine industry playbook", "Brief me like an insider on the equine industry: who decides, top pains, lingo I should know, common objections."),
-        ("🚗 AMR industry playbook", "Brief me like an insider on auto/marine/RV/transit prospects: who decides, top pains, common objections, how to position the AMR product."),
-        ("🧪 SpillMaster playbook", "Brief me like an insider on commercial cleanup / food / healthcare prospects for SpillMaster."),
+        ("📝 Critique my last 3 emails", "Pull our 3 most recent sent emails and critique them — what's working, what's salesy, what to fix."),
+        ("🐴 Equine playbook", "Brief me like an insider on the equine industry: who decides, top pains, lingo, common objections."),
+        ("🚗 AMR playbook", "Brief me on auto/marine/RV/transit prospects: who decides, top pains, common objections, how to position the AMR product."),
+        ("🧪 SpillMaster playbook", "Brief me on commercial cleanup / food / healthcare prospects for SpillMaster."),
         ("🏠 HouseHold playbook", "Brief me on residential & cleaning-service prospects — who decides, top pains, how to position HouseHold."),
-        ("💨 Inversion Misting playbook", "Brief me on large-facility / livestock / ag prospects — what to say to win the Inversion Misting capital sale."),
-        ("⚖️ Top 5 objections + rebuttals", "Walk me through the top 5 objections we hit and the NEPQ-style response for each."),
-        ("🔁 Re-engagement sequence", "Design a 3-touch re-engagement sequence for prospects who went quiet after one reply. Each message should use a different sales framework."),
+        ("💨 Inversion Misting", "Brief me on large-facility / livestock / ag prospects — what to say to win the Inversion Misting capital sale."),
+        ("⚖️ Top 5 objections", "Walk me through the top 5 objections we hit and the NEPQ-style response for each."),
+        ("🔁 Re-engagement sequence", "Design a 3-touch re-engagement sequence for prospects who went quiet after one reply. Use a different framework each touch."),
+        ("🧠 Remember this:", "I want you to remember this fact going forward: "),
     ]
-    cols = st.columns(4)
-    for i, (label, prompt) in enumerate(suggestions):
-        with cols[i % 4]:
-            if st.button(label, key=f"suggest_{label}", use_container_width=True):
-                st.session_state.freeform_chat.append({'role': 'user', 'content': prompt})
-                with st.spinner("Aqua thinking..."):
-                    result = nepq_engine.training_chat(
-                        st.session_state.freeform_chat[:-1],
-                        prompt,
-                        training_mode='qa'
-                    )
-                st.session_state.freeform_chat.append({
-                    'role': 'assistant', 'content': result['text']
-                })
-                st.rerun()
+    with st.expander("⚡ Quick prompts (click to send)", expanded=(len(history) == 0)):
+        cols = st.columns(4)
+        for i, (label, prompt) in enumerate(suggestions):
+            with cols[i % 4]:
+                if st.button(label, key=f"qp_{i}", use_container_width=True):
+                    if user_email:
+                        database.aqua_save_message(user_email, 'user', prompt)
+                    _aqua_respond(user_email, prompt)
+                    st.rerun()
 
     st.markdown("---")
 
-    # Chat history
-    for msg in st.session_state.freeform_chat:
+    # Render history as chat bubbles
+    if not history:
+        st.caption(f"_Empty chat. Aqua's ready. Try a quick prompt above or just type below._")
+    for msg in history:
         if msg['role'] == 'user':
             st.html(
-                f"<div style='background:#0f172a;color:white;padding:0.8rem 1.1rem;"
+                f"<div style='background:linear-gradient(135deg,#06b6d4,#1a5f3f);"
+                f"color:white;padding:0.8rem 1.1rem;"
                 f"border-radius:14px 14px 4px 14px;margin-bottom:0.5rem;"
-                f"margin-left:15%;font-size:0.95rem;white-space:pre-wrap'>{msg['content']}</div>"
+                f"margin-left:18%;font-size:0.95rem;white-space:pre-wrap;"
+                f"box-shadow:0 2px 8px rgba(6,182,212,0.2)'>{msg['content']}</div>"
             )
         else:
+            src_badge = ''
+            if msg.get('source') and msg['source'] != 'cerebras':
+                src_badge = f"<span style='font-size:0.7rem;color:#94a3b8'> · {msg['source']}</span>"
             st.html(
-                f"<div style='background:#f1f5f9;color:#0f172a;padding:0.8rem 1.1rem;"
+                f"<div style='background:rgba(255,255,255,0.7);"
+                f"backdrop-filter:blur(12px);"
+                f"border:1px solid rgba(15,23,42,0.08);color:#0a0f1c;"
+                f"padding:0.8rem 1.1rem;"
                 f"border-radius:14px 14px 14px 4px;margin-bottom:0.5rem;"
-                f"margin-right:15%;font-size:0.95rem;white-space:pre-wrap'>{msg['content']}</div>"
+                f"margin-right:18%;font-size:0.95rem;white-space:pre-wrap'>"
+                f"<div style='font-size:0.72rem;color:#06b6d4;font-weight:700;"
+                f"text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.3rem'>"
+                f"AQUA{src_badge}</div>"
+                f"{msg['content']}</div>"
             )
 
-    # Input
-    with st.form('freeform_chat_form', clear_on_submit=True):
-        user_input = st.text_area(
-            "Your message:",
-            placeholder="Ask Aqua anything — sales advice, market insights, deal strategy, roleplay...",
-            height=80,
-            key='freeform_input',
+    # Clear button (separate from input)
+    cc1, cc2 = st.columns([5, 1])
+    if user_email and history and cc2.button("🗑️ Clear chat", key="aqua_clear",
+                                                use_container_width=True):
+        database.aqua_clear_chat(user_email)
+        st.rerun()
+
+    # Native chat input — Enter sends, Shift+Enter newline
+    user_input = st.chat_input("Talk to Aqua… (Enter to send, Shift+Enter for newline)")
+    if user_input and user_input.strip():
+        if user_email:
+            database.aqua_save_message(user_email, 'user', user_input.strip())
+            # Detect "remember" instructions and persist as long-term facts
+            lower = user_input.strip().lower()
+            if any(k in lower for k in ['remember this', 'remember that',
+                                          'going forward', 'from now on']):
+                database.aqua_remember_fact(user_email, user_input.strip(),
+                                              category='user_directive')
+        _aqua_respond(user_email, user_input.strip())
+        st.rerun()
+
+
+def _aqua_respond(user_email, user_message):
+    """Build the system context, call the LLM, persist Aqua's reply."""
+    history = database.aqua_get_chat_history(user_email, limit=20) if user_email else []
+    facts = database.aqua_get_user_facts(user_email, limit=20) if user_email else []
+
+    # Inject persistent memory as extra context
+    extra_lines = []
+    if facts:
+        extra_lines.append("## WHAT YOU'VE LEARNED ABOUT THIS PERSON (persistent memory across sessions)")
+        for f in facts:
+            extra_lines.append(f"- {f['fact']}")
+    extra_context = "\n".join(extra_lines) if extra_lines else ""
+
+    # Convert DB history to LLM message format (exclude the just-saved user msg
+    # so we don't duplicate it — training_chat appends it itself)
+    llm_history = [{'role': m['role'], 'content': m['content']} for m in history[:-1]]
+
+    with st.spinner("Aqua thinking..."):
+        result = nepq_engine.training_chat(
+            llm_history,
+            user_message,
+            training_mode='qa',
+            extra_context=extra_context,
         )
-        col1, col2 = st.columns([3, 1])
-        send = col1.form_submit_button("Send →", type="primary", use_container_width=True)
-        clear = col2.form_submit_button("🗑️ Clear chat", use_container_width=True)
 
-    if clear:
-        st.session_state.freeform_chat = []
-        st.rerun()
-
-    if send and user_input.strip():
-        st.session_state.freeform_chat.append({'role': 'user', 'content': user_input.strip()})
-        with st.spinner("Aqua thinking..."):
-            # Use Q&A mode but with extra context that this is general team chat
-            result = nepq_engine.training_chat(
-                st.session_state.freeform_chat[:-1],
-                user_input.strip(),
-                training_mode='qa'
-            )
-        st.session_state.freeform_chat.append({
-            'role': 'assistant', 'content': result['text']
-        })
-        # Cap history at 50 messages
-        st.session_state.freeform_chat = st.session_state.freeform_chat[-50:]
-        st.rerun()
+    if user_email:
+        database.aqua_save_message(user_email, 'assistant', result['text'],
+                                     source=result.get('source'))
 
 
 def _show_knowledge_base():

@@ -126,6 +126,108 @@ def init_db():
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_received ON inbound_messages(received_at DESC)')
 
+    # Aqua's persistent chat memory — per team-member, survives across sessions/redeploys
+    c.execute('''CREATE TABLE IF NOT EXISTS aqua_chat_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_aqua_chat_user ON aqua_chat_log(user_email, id DESC)')
+
+    # Aqua's per-user fact memory — things Aqua has learned about each team member
+    c.execute('''CREATE TABLE IF NOT EXISTS aqua_user_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT NOT NULL,
+        fact TEXT NOT NULL,
+        category TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_email, fact)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_aqua_memory_user ON aqua_user_memory(user_email)')
+
+    conn.commit()
+    conn.close()
+
+
+def aqua_save_message(user_email, role, content, source=None):
+    """Persist a chat turn for a specific team member."""
+    if not user_email or not content:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO aqua_chat_log (user_email, role, content, source)
+                 VALUES (?,?,?,?)''', (user_email.lower(), role, content, source))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def aqua_get_chat_history(user_email, limit=40):
+    """Get recent chat turns for a user, oldest-first (chronological for the LLM)."""
+    if not user_email:
+        return []
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT role, content, source, created_at FROM aqua_chat_log
+                 WHERE user_email = ?
+                 ORDER BY id DESC LIMIT ?''', (user_email.lower(), limit))
+    rows = c.fetchall()
+    conn.close()
+    return list(reversed([dict(r) for r in rows]))
+
+
+def aqua_clear_chat(user_email):
+    """Wipe a user's Aqua chat history (they hit Clear)."""
+    if not user_email:
+        return 0
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM aqua_chat_log WHERE user_email = ?', (user_email.lower(),))
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def aqua_remember_fact(user_email, fact, category=None):
+    """Aqua learns something about a user. Idempotent — duplicates ignored."""
+    if not user_email or not fact:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT INTO aqua_user_memory (user_email, fact, category)
+                     VALUES (?,?,?)''', (user_email.lower(), fact, category))
+        conn.commit()
+        new_id = c.lastrowid
+    except sqlite3.IntegrityError:
+        new_id = None
+    conn.close()
+    return new_id
+
+
+def aqua_get_user_facts(user_email, limit=50):
+    """Return facts Aqua has remembered about this user, newest first."""
+    if not user_email:
+        return []
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT fact, category, created_at FROM aqua_user_memory
+                 WHERE user_email = ?
+                 ORDER BY id DESC LIMIT ?''', (user_email.lower(), limit))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def aqua_forget_fact(fact_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM aqua_user_memory WHERE id = ?', (fact_id,))
     conn.commit()
     conn.close()
 
