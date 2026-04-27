@@ -95,133 +95,262 @@ if "db_initialized" not in st.session_state:
 # STYLES
 # ===========================================================================
 st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
-    /* ==================== RESET ==================== */
+    /* ==================== HIGH-TECH BASE ==================== */
+    :root {
+        --bg: #f6f8fb;
+        --surface: rgba(255,255,255,0.72);
+        --surface-solid: #ffffff;
+        --border: rgba(15,23,42,0.06);
+        --border-strong: rgba(15,23,42,0.12);
+        --ink: #0a0f1c;
+        --ink-soft: #475569;
+        --ink-muted: #94a3b8;
+        --accent: #06b6d4;
+        --accent-2: #1a5f3f;
+        --accent-glow: 0 0 24px rgba(6,182,212,0.35);
+        --grad: linear-gradient(135deg, #06b6d4 0%, #1a5f3f 100%);
+        --grad-soft: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(26,95,63,0.10));
+    }
+
+    /* App background — subtle dot grid for tech feel */
+    .stApp {
+        background:
+            radial-gradient(circle at 0% 0%, rgba(6,182,212,0.05) 0%, transparent 40%),
+            radial-gradient(circle at 100% 100%, rgba(26,95,63,0.05) 0%, transparent 40%),
+            var(--bg) !important;
+    }
+    .stApp::before {
+        content: "";
+        position: fixed; inset: 0;
+        background-image: radial-gradient(circle, rgba(15,23,42,0.04) 1px, transparent 1px);
+        background-size: 24px 24px;
+        pointer-events: none;
+        z-index: 0;
+    }
+
     .main {padding-top: 0.5rem;}
     .block-container {
         padding-top: 1rem !important;
         padding-bottom: 4rem !important;
-        max-width: 1180px;
+        max-width: 1240px;
+        position: relative;
+        z-index: 1;
     }
 
-    /* Use modern font stack */
+    /* Typography */
     html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display',
-                     'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
         -webkit-font-smoothing: antialiased;
+        color: var(--ink);
     }
-
-    /* ==================== TYPOGRAPHY ====================
-       Only style headings INSIDE Streamlit's native containers.
-       Custom HTML hero blocks won't inherit these — they set their own colors. */
+    code, pre, .stCode, [class*="monospace"] {
+        font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Monaco, monospace !important;
+    }
 
     div[data-testid="stMarkdownContainer"] > h1:not([style*="color"]) {
-        color: #0f172a;
-        font-size: 1.875rem;
-        font-weight: 700;
-        letter-spacing: -0.025em;
+        color: var(--ink);
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
         margin-bottom: 0.5rem;
     }
     div[data-testid="stMarkdownContainer"] > h2:not([style*="color"]) {
-        color: #0f172a;
-        font-weight: 600;
+        color: var(--ink);
+        font-weight: 700;
         letter-spacing: -0.02em;
-        font-size: 1.5rem;
+        font-size: 1.45rem;
     }
     div[data-testid="stMarkdownContainer"] > h3:not([style*="color"]) {
-        color: #334155;
+        color: var(--ink-soft);
         font-weight: 600;
-        font-size: 1.15rem;
+        font-size: 1.1rem;
+        letter-spacing: -0.01em;
     }
-
-    /* Streamlit's title/header components */
     h1[data-testid="stHeading"] {
-        color: #0f172a !important;
-        font-weight: 700;
-        letter-spacing: -0.025em;
+        color: var(--ink) !important;
+        font-weight: 800;
+        letter-spacing: -0.03em;
     }
 
     /* ==================== BUTTONS ==================== */
     .stButton button {
-        border-radius: 10px !important;
-        padding: 0.6rem 1.2rem !important;
-        font-weight: 500;
-        font-size: 0.95rem;
-        border: 1px solid #e2e8f0;
-        background: #fff;
-        color: #334155;
-        transition: all 0.15s ease;
+        border-radius: 12px !important;
+        padding: 0.65rem 1.3rem !important;
+        font-weight: 600;
+        font-size: 0.93rem;
+        letter-spacing: -0.005em;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: var(--ink);
+        transition: transform 0.12s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
     }
     .stButton button:hover {
-        border-color: #cbd5e1;
-        background: #f8fafc;
+        border-color: var(--accent);
+        background: var(--surface-solid);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(6,182,212,0.15);
     }
     .stButton button[kind="primary"] {
-        background: #0f172a !important;
+        background: var(--grad) !important;
         color: white !important;
         border: none !important;
-        box-shadow: 0 1px 3px rgba(15,23,42,0.15);
+        box-shadow: 0 2px 8px rgba(6,182,212,0.25), inset 0 1px 0 rgba(255,255,255,0.18);
+        position: relative;
     }
     .stButton button[kind="primary"]:hover {
-        background: #1e293b !important;
-        box-shadow: 0 4px 12px rgba(15,23,42,0.2);
+        transform: translateY(-1px);
+        box-shadow: var(--accent-glow), 0 8px 24px rgba(26,95,63,0.3);
+    }
+    .stButton button[kind="primary"]:active {
+        transform: translateY(0);
     }
 
     /* ==================== METRICS ==================== */
     div[data-testid="stMetric"] {
-        background: #fff;
-        padding: 1rem 1.2rem;
-        border-radius: 12px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        background: var(--surface);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        padding: 1.1rem 1.3rem;
+        border-radius: 14px;
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 8px 24px rgba(15,23,42,0.04);
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 16px 32px rgba(6,182,212,0.10);
     }
     div[data-testid="stMetricValue"] {
-        color: #0f172a;
+        color: var(--ink) !important;
+        font-family: 'JetBrains Mono', ui-monospace, monospace !important;
         font-weight: 700;
-        font-size: 1.75rem !important;
+        font-size: 1.85rem !important;
+        letter-spacing: -0.02em;
     }
     div[data-testid="stMetricLabel"] {
-        color: #64748b;
+        color: var(--ink-muted);
         font-weight: 500;
-        font-size: 0.85rem;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+        font-weight: 600;
     }
 
     /* ==================== TABS ==================== */
+    div[data-baseweb="tab-list"] {
+        background: var(--surface);
+        backdrop-filter: blur(12px);
+        border-radius: 12px;
+        padding: 0.3rem;
+        border: 1px solid var(--border-strong);
+        gap: 0.2rem;
+    }
     button[data-baseweb="tab"] {
-        font-weight: 500 !important;
-        color: #64748b !important;
+        font-weight: 600 !important;
+        color: var(--ink-muted) !important;
+        font-size: 0.92rem !important;
+        border-radius: 9px !important;
+        padding: 0.5rem 1.1rem !important;
+        transition: all 0.18s ease;
+    }
+    button[data-baseweb="tab"]:hover {
+        color: var(--ink) !important;
+        background: rgba(6,182,212,0.06);
     }
     button[data-baseweb="tab"][aria-selected="true"] {
-        color: #0f172a !important;
-        font-weight: 600 !important;
+        color: white !important;
+        background: var(--grad) !important;
+        box-shadow: 0 2px 8px rgba(6,182,212,0.25);
     }
+    div[data-baseweb="tab-highlight"] { display: none !important; }
+    div[data-baseweb="tab-border"] { display: none !important; }
 
     /* ==================== INPUTS ==================== */
     input[type="text"], input[type="email"], input[type="password"],
     input[type="number"], textarea {
-        border-radius: 8px !important;
-        border-color: #e2e8f0 !important;
+        border-radius: 10px !important;
+        border-color: var(--border-strong) !important;
+        background: var(--surface-solid) !important;
         font-size: 0.95rem !important;
+        transition: all 0.18s ease;
     }
     input[type="text"]:focus, input[type="email"]:focus,
-    input[type="password"]:focus, textarea:focus {
-        border-color: #0f172a !important;
-        box-shadow: 0 0 0 3px rgba(15,23,42,0.05) !important;
+    input[type="password"]:focus, textarea:focus,
+    input[type="number"]:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 3px rgba(6,182,212,0.15) !important;
     }
     [data-baseweb="select"] > div {
-        border-radius: 8px !important;
-        border-color: #e2e8f0 !important;
+        border-radius: 10px !important;
+        border-color: var(--border-strong) !important;
+        background: var(--surface-solid) !important;
+    }
+
+    /* ==================== SLIDERS ==================== */
+    [data-testid="stSlider"] [role="slider"] {
+        background: var(--grad) !important;
+        box-shadow: 0 0 12px rgba(6,182,212,0.4) !important;
+    }
+    [data-testid="stSlider"] [data-baseweb="slider"] > div > div > div {
+        background: var(--grad) !important;
     }
 
     /* ==================== EXPANDER ==================== */
     div[data-testid="stExpander"] {
-        border-radius: 10px !important;
-        border-color: #e2e8f0 !important;
+        border-radius: 12px !important;
+        border-color: var(--border-strong) !important;
+        background: var(--surface) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+    div[data-testid="stExpander"] summary {
+        font-weight: 600;
     }
 
     /* ==================== PROGRESS ==================== */
+    [data-testid="stProgress"] > div > div {
+        background: rgba(15,23,42,0.06) !important;
+        border-radius: 999px;
+    }
     [data-testid="stProgress"] > div > div > div {
-        background-color: #0f172a;
+        background: var(--grad) !important;
+        box-shadow: 0 0 10px rgba(6,182,212,0.4);
+    }
+
+    /* ==================== CHECKBOX ==================== */
+    [data-testid="stCheckbox"] [aria-checked="true"] svg {
+        background: var(--grad) !important;
+    }
+
+    /* ==================== STATUS BANNERS ==================== */
+    .stSuccess {
+        background: linear-gradient(135deg, rgba(34,197,94,0.10), rgba(34,197,94,0.04)) !important;
+        border: 1px solid rgba(34,197,94,0.30) !important;
+        border-radius: 10px !important;
+    }
+    .stError {
+        background: linear-gradient(135deg, rgba(239,68,68,0.10), rgba(239,68,68,0.04)) !important;
+        border: 1px solid rgba(239,68,68,0.30) !important;
+        border-radius: 10px !important;
+    }
+    .stWarning {
+        background: linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.04)) !important;
+        border: 1px solid rgba(245,158,11,0.30) !important;
+        border-radius: 10px !important;
+    }
+    .stInfo {
+        background: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(6,182,212,0.04)) !important;
+        border: 1px solid rgba(6,182,212,0.30) !important;
+        border-radius: 10px !important;
     }
 
     /* ==================== HIDE STREAMLIT CHROME ==================== */
@@ -229,23 +358,27 @@ st.markdown("""
     footer {visibility: hidden;}
     header[data-testid="stHeader"] {background: transparent; height: 0;}
 
-    /* ==================== STATUS COLORS ==================== */
-    .stSuccess {
-        background-color: #f0fdf4 !important;
-        border-color: #86efac !important;
+    /* ==================== ANIMATIONS ==================== */
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 8px rgba(6,182,212,0.4); }
+        50% { box-shadow: 0 0 24px rgba(6,182,212,0.8); }
     }
-    .stError {
-        background-color: #fef2f2 !important;
-        border-color: #fca5a5 !important;
+    @keyframes fade-up {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
     }
-    .stWarning {
-        background-color: #fffbeb !important;
-        border-color: #fcd34d !important;
+    .stApp [data-testid="stVerticalBlock"] > div {
+        animation: fade-up 0.35s ease both;
     }
-    .stInfo {
-        background-color: #eff6ff !important;
-        border-color: #93c5fd !important;
+
+    /* Subtle scrollbar */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(15,23,42,0.15);
+        border-radius: 999px;
     }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.3); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -314,12 +447,16 @@ def main():
         show_onboarding()
         return
 
+    # Legacy deep-links: route old standalone pages through unified Operations
+    legacy_to_ops = {"home": "today", "autopilot": "autopilot", "sales_bot": "sales_bot"}
+    if st.session_state.page in legacy_to_ops:
+        st.session_state.ops_subpage = legacy_to_ops[st.session_state.page]
+        st.session_state.page = "operations"
+
     show_top_nav()
 
     pages = {
-        "home": show_home,
-        "autopilot": show_autopilot,
-        "sales_bot": show_sales_bot,
+        "operations": show_operations,
         "inbox": show_inbox,
         "customers": show_customers,
         "customer_detail": show_customer_detail,
@@ -330,7 +467,40 @@ def main():
         "audit": show_audit_log,
         "setup": show_setup,
     }
-    pages.get(st.session_state.page, show_home)()
+    pages.get(st.session_state.page, show_operations)()
+
+
+def show_operations():
+    """Unified Operations hub: Today / Autopilot / Sales Bot in one place."""
+    sub = st.session_state.setdefault('ops_subpage', 'today')
+
+    # Sub-nav pill bar
+    st.html(
+        "<div style='display:flex;gap:0.4rem;background:rgba(255,255,255,0.7);"
+        "backdrop-filter:blur(12px);border:1px solid rgba(15,23,42,0.08);"
+        "padding:0.35rem;border-radius:14px;margin-bottom:1.2rem;width:fit-content'>"
+        "<style>.ops-active{background:linear-gradient(135deg,#06b6d4,#1a5f3f) !important;"
+        "color:white !important;box-shadow:0 2px 8px rgba(6,182,212,0.25)}</style>"
+        "</div>"
+    )
+    sub_cols = st.columns([1, 1, 1, 5])
+    options = [('today', '🏠 Today'), ('autopilot', '🤖 Autopilot'), ('sales_bot', '🎯 Sales Bot')]
+    for i, (key, label) in enumerate(options):
+        with sub_cols[i]:
+            is_active = sub == key
+            if st.button(label, key=f"ops_sub_{key}", use_container_width=True,
+                         type="primary" if is_active else "secondary"):
+                st.session_state.ops_subpage = key
+                st.rerun()
+
+    st.markdown("")
+
+    if sub == 'autopilot':
+        show_autopilot()
+    elif sub == 'sales_bot':
+        show_sales_bot()
+    else:
+        show_home()
 
 
 # ===========================================================================
@@ -360,17 +530,15 @@ def show_top_nav():
         f"</div></div>"
     )
 
-    cols = st.columns(8)
     nav_items = [
-        ("🏠 Today", "home"),
-        ("🤖 Autopilot", "autopilot"),
-        ("🎯 Sales Bot", "sales_bot"),
+        ("🚀 Operations", "operations"),
         ("📬 Inbox", "inbox"),
         ("👥 Customers", "customers"),
         ("✉️ Compose", "send_message"),
-        ("📋 Audit Log", "audit"),
+        ("📋 Audit", "audit"),
         ("⚙️ Setup", "setup"),
     ]
+    cols = st.columns(len(nav_items))
     for col, (label, page_id) in zip(cols, nav_items):
         with col:
             is_active = st.session_state.page == page_id or (
@@ -380,7 +548,6 @@ def show_top_nav():
                          use_container_width=True,
                          type="primary" if is_active else "secondary"):
                 st.session_state.page = page_id
-                # Clear sub-navigation state
                 if page_id != "customer_detail":
                     st.session_state.pop('viewing_lead_id', None)
                 if page_id != "send_message":
