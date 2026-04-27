@@ -653,7 +653,7 @@ def _admin_team_section():
 def _admin_keys_section():
     import team as _team
 
-    PROVIDERS = ['cerebras', 'claude', 'openai', 'groq']
+    PROVIDERS = [p['id'] for p in api_keys.PROVIDER_CATALOG]
 
     # ============================================================
     # ADD / REPLACE TEAM-MEMBER KEY ON THEIR BEHALF
@@ -717,37 +717,52 @@ def _admin_keys_section():
     st.markdown("---")
 
     # ============================================================
-    # SHARED BASELINE KEYS
+    # SHARED BASELINE KEYS — every provider with link + tier
     # ============================================================
     st.markdown("##### 🌐 Shared baseline keys (team-wide fallback)")
-    st.caption("Anyone can use these. Used when no personal keys are available or all are throttled.")
+    st.caption("Aqua tries providers in order — FREE tier first, PAID tier as backup. "
+                "Adding multiple lets her keep working even if one's throttled.")
 
-    for prov in PROVIDERS:
-        k = api_keys.get_key(prov)
-        c1, c2, c3 = st.columns([2, 3, 1])
-        c1.markdown(f"**{prov.title()}**")
-        if k:
-            masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
-            c2.markdown(f"`{masked}` ✅")
-            if c3.button("🗑", key=f"adm_baseline_rm_{prov}"):
-                api_keys.delete_key(prov)
-                st.rerun()
-        else:
-            c2.caption("_not configured_")
-            c3.caption("")
+    for prov_meta in api_keys.PROVIDER_CATALOG:
+        pid = prov_meta['id']
+        k = api_keys.get_key(pid)
+        with st.container(border=True):
+            top = st.columns([3, 1, 2])
+            top[0].markdown(f"**{prov_meta['name']}**")
+            tier_label = prov_meta['tier']
+            tier_color = prov_meta['tier_color']
+            top[1].markdown(
+                f"<span style='background:{tier_color};color:white;"
+                f"padding:0.2rem 0.6rem;border-radius:10px;font-size:0.72rem;"
+                f"font-weight:700;letter-spacing:0.05em'>{tier_label}</span>",
+                unsafe_allow_html=True
+            )
+            top[2].markdown(
+                f"[**🔗 Get key →**]({prov_meta['keys_url']})",
+                help=f"Sign up at {prov_meta['signup_url']} then create an API key."
+            )
+            st.caption(prov_meta['note'])
 
-    st.markdown("###### Add or replace a shared baseline key")
-    with st.form("admin_baseline_key", clear_on_submit=True):
-        c1, c2 = st.columns([1, 3])
-        bp = c1.selectbox("Provider", PROVIDERS, key="adm_baseline_prov")
-        bk = c2.text_input("Key", type="password",
-                            placeholder="csk-... / sk-ant-... / sk-... / gsk-...")
-        if st.form_submit_button("💾 Save shared baseline key",
-                                   type="primary", use_container_width=True):
-            if bk.strip():
-                api_keys.set_key(bp, bk.strip())
-                st.success(f"✅ Saved shared {bp} baseline key")
-                st.rerun()
+            row = st.columns([5, 1])
+            if k:
+                masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
+                row[0].markdown(f"✅ Connected · `{masked}`")
+                if row[1].button("🗑", key=f"adm_baseline_rm_{pid}"):
+                    api_keys.delete_key(pid)
+                    st.rerun()
+            else:
+                with row[0].popover("➕ Add key", use_container_width=True):
+                    placeholder = (prov_meta['key_prefix'] + '...') if prov_meta['key_prefix'] else 'paste key'
+                    new_k = st.text_input(f"{prov_meta['name']} key",
+                                           type="password",
+                                           placeholder=placeholder,
+                                           key=f"adm_baseline_input_{pid}")
+                    if st.button("Save", key=f"adm_baseline_save_{pid}",
+                                  type="primary", use_container_width=True):
+                        if new_k.strip():
+                            api_keys.set_key(pid, new_k.strip())
+                            st.success(f"✅ Saved {prov_meta['name']} key")
+                            st.rerun()
 
 
 def _admin_memory_section():

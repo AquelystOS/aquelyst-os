@@ -418,6 +418,67 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
     return None, last_err
 
 
+# Provider-specific recommended-model lists for OpenAI-compatible providers
+_OPENAI_COMPAT_MODELS = {
+    'groq': ['llama-3.3-70b-versatile', 'llama-3.1-70b-versatile',
+             'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+    'together': ['meta-llama/Llama-3.3-70B-Instruct-Turbo',
+                  'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+                  'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+    'mistral': ['mistral-large-latest', 'mistral-medium-latest',
+                 'open-mixtral-8x22b', 'mistral-small-latest'],
+    'cohere': ['command-r-plus-08-2024', 'command-r-08-2024'],
+    'openai': ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
+    'openrouter': ['anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct',
+                    'mistralai/mistral-large'],
+    'deepseek': ['deepseek-chat', 'deepseek-reasoner'],
+}
+
+
+def _openai_compat_chat(messages, provider_id, max_tokens=1024, temperature=0.7):
+    """Generic chat call for OpenAI-API-compatible providers.
+    Tries each model in the provider's preference list."""
+    api_key = api_keys.get_key(provider_id)
+    if not api_key:
+        return None, f"No {provider_id} key"
+    meta = api_keys.get_provider_meta(provider_id)
+    if not meta:
+        return None, f"Unknown provider {provider_id}"
+    base = meta['api_base']
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    last_err = ""
+    for model in _OPENAI_COMPAT_MODELS.get(provider_id, []):
+        try:
+            r = requests.post(
+                f"{base}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+                timeout=45,
+            )
+            if r.status_code == 200:
+                return r.json()['choices'][0]['message']['content'], None
+            last_err = f"{provider_id} {r.status_code} on {model}: {r.text[:120]}"
+            if r.status_code in (429, 503, 404, 400):
+                continue
+            break  # 401/403/etc — don't keep trying models
+        except requests.Timeout:
+            last_err = f"{provider_id} timeout on {model}"
+            continue
+        except Exception as e:
+            last_err = f"{provider_id} error on {model}: {str(e)[:80]}"
+            continue
+    return None, last_err
+
+
 def _claude_chat(messages, max_tokens=1024, system_prompt=None):
     """Call Claude with a message list. Returns (text, error)."""
     api_key = api_keys.get_key('claude')
@@ -503,19 +564,34 @@ def chat(messages, prefer='auto', extra_context=''):
 
     last_err = ""
     if prefer == 'auto':
-        if api_keys.has_key('claude'):
-            text, err = _claude_chat(messages, system_prompt=system)
-            if text:
-                return text, 'claude'
-            last_err = err or last_err
+        # Free tier first, paid last. Each provider tries its own model rotation.
+        # Cerebras has its own pool rotation; the others use _openai_compat_chat.
+        attempts = []
         if api_keys.has_key('cerebras'):
             cerebras_msgs = [{"role": "system", "content": system}] + messages
-            text, err = _cerebras_chat(cerebras_msgs)
+            attempts.append(('cerebras', lambda: _cerebras_chat(cerebras_msgs)))
+        for pid in ('groq', 'together', 'mistral', 'cohere'):
+            if api_keys.has_key(pid):
+                _msgs = [{"role": "system", "content": system}] + messages
+                attempts.append((pid, lambda p=pid, m=_msgs: _openai_compat_chat(m, p)))
+        # Premium tier
+        if api_keys.has_key('claude'):
+            attempts.append(('claude', lambda: _claude_chat(messages, system_prompt=system)))
+        for pid in ('deepseek', 'openrouter', 'openai'):
+            if api_keys.has_key(pid):
+                _msgs = [{"role": "system", "content": system}] + messages
+                attempts.append((pid, lambda p=pid, m=_msgs: _openai_compat_chat(m, p)))
+
+        for pid, fn in attempts:
+            try:
+                text, err = fn()
+            except Exception as e:
+                text, err = None, f"{pid} crashed: {str(e)[:80]}"
             if text:
-                return text, 'cerebras'
+                return text, pid
             last_err = err or last_err
-        # Encode the failure reason in the source string so UI can surface it
-        src = f"template (LLM down: {last_err[:120]})" if last_err else "template (no AI key)"
+
+        src = f"template (LLM down: {last_err[:120]})" if last_err else "template (no AI key configured)"
         return _template_fallback(messages), src
 
     if prefer == 'claude':

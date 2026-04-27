@@ -165,3 +165,127 @@ PROVIDER_INFO = {
 
 def get_provider_info(provider):
     return PROVIDER_INFO.get(provider, {})
+
+
+# ============================================================================
+# Full provider catalog — used by Admin + Setup UIs to show all options,
+# their tier (free/freemium/paid), where to sign up, and how the key looks.
+# Order = priority Aqua should try them in (free first, premium last).
+# ============================================================================
+PROVIDER_CATALOG = [
+    {
+        'id': 'cerebras',
+        'name': 'Cerebras',
+        'tier': 'FREE',
+        'tier_color': '#16a34a',
+        'note': 'Llama / Qwen / GPT-OSS at 2000+ tok/sec. Generous free tier.',
+        'signup_url': 'https://cloud.cerebras.ai',
+        'keys_url': 'https://cloud.cerebras.ai/platform/keys',
+        'key_prefix': 'csk-',
+        'api_base': 'https://api.cerebras.ai/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'groq',
+        'name': 'Groq',
+        'tier': 'FREE',
+        'tier_color': '#16a34a',
+        'note': 'Fastest inference on Earth. Free tier with daily rate limits.',
+        'signup_url': 'https://console.groq.com',
+        'keys_url': 'https://console.groq.com/keys',
+        'key_prefix': 'gsk_',
+        'api_base': 'https://api.groq.com/openai/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'together',
+        'name': 'Together AI',
+        'tier': 'FREE',
+        'tier_color': '#16a34a',
+        'note': '$25 free credit on signup. Many open models.',
+        'signup_url': 'https://api.together.xyz',
+        'keys_url': 'https://api.together.xyz/settings/api-keys',
+        'key_prefix': '',
+        'api_base': 'https://api.together.xyz/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'mistral',
+        'name': 'Mistral',
+        'tier': 'FREEMIUM',
+        'tier_color': '#06b6d4',
+        'note': 'European AI. Free tier with rate limits, paid scales up.',
+        'signup_url': 'https://console.mistral.ai',
+        'keys_url': 'https://console.mistral.ai/api-keys',
+        'key_prefix': '',
+        'api_base': 'https://api.mistral.ai/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'cohere',
+        'name': 'Cohere',
+        'tier': 'FREE',
+        'tier_color': '#16a34a',
+        'note': 'Free tier with generous limits. Chat + reasoning.',
+        'signup_url': 'https://cohere.com',
+        'keys_url': 'https://dashboard.cohere.com/api-keys',
+        'key_prefix': '',
+        'api_base': 'https://api.cohere.ai/compatibility/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'openrouter',
+        'name': 'OpenRouter',
+        'tier': 'PAID',
+        'tier_color': '#f59e0b',
+        'note': 'One key → access to every model. Cheap pay-as-you-go.',
+        'signup_url': 'https://openrouter.ai',
+        'keys_url': 'https://openrouter.ai/keys',
+        'key_prefix': 'sk-or-',
+        'api_base': 'https://openrouter.ai/api/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'deepseek',
+        'name': 'DeepSeek',
+        'tier': 'PAID',
+        'tier_color': '#f59e0b',
+        'note': 'Powerful + extremely cheap. Strong reasoning model.',
+        'signup_url': 'https://platform.deepseek.com',
+        'keys_url': 'https://platform.deepseek.com/api_keys',
+        'key_prefix': 'sk-',
+        'api_base': 'https://api.deepseek.com/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'openai',
+        'name': 'OpenAI',
+        'tier': 'PAID',
+        'tier_color': '#f59e0b',
+        'note': 'GPT-4o family. Industry baseline.',
+        'signup_url': 'https://platform.openai.com',
+        'keys_url': 'https://platform.openai.com/api-keys',
+        'key_prefix': 'sk-',
+        'api_base': 'https://api.openai.com/v1',
+        'compat': 'openai',
+    },
+    {
+        'id': 'claude',
+        'name': 'Anthropic Claude',
+        'tier': 'PAID',
+        'tier_color': '#f59e0b',
+        'note': 'Most powerful for nuanced sales chat. ~$5 = hundreds of replies.',
+        'signup_url': 'https://console.anthropic.com',
+        'keys_url': 'https://console.anthropic.com/settings/keys',
+        'key_prefix': 'sk-ant-',
+        'api_base': 'https://api.anthropic.com/v1',
+        'compat': 'anthropic',
+    },
+]
+
+
+def get_provider_meta(provider_id):
+    for p in PROVIDER_CATALOG:
+        if p['id'] == provider_id:
+            return p
+    return None
