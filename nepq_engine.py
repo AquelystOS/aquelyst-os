@@ -266,22 +266,36 @@ You have access to context about the prospect (business name, contact, score, pa
 # ============================================================================
 _CEREBRAS_BAD_MODELS = set()  # models we've discovered we can't use this process
 
-def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
-    """Call Cerebras with retries + model rotation when rate-limited or model 404s.
-    Returns (text, error)."""
-    api_key = api_keys.get_key('cerebras')
-    if not api_key:
-        return None, "No Cerebras key"
-
-    # Discover available models
-    available = []
+def _collect_cerebras_keys():
+    """Build the full Cerebras key pool: every team member's personal key + the
+    shared baseline key. De-duplicated, in rotation order (least-failed first).
+    Returns list of (key, owner_email_or_None)."""
+    pool = []
+    seen = set()
     try:
-        mr = requests.get(f"{CEREBRAS_BASE_URL}/models",
-                          headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
-        if mr.status_code == 200:
-            available = [m['id'] for m in mr.json().get('data', [])]
+        import database
+        for row in database.team_keys_get_pool('cerebras'):
+            k = row.get('api_key')
+            if k and k not in seen:
+                pool.append((k, row.get('user_email')))
+                seen.add(k)
     except Exception:
         pass
+    # Always include the shared baseline key as the last resort
+    baseline = api_keys.get_key('cerebras')
+    if baseline and baseline not in seen:
+        pool.append((baseline, None))
+        seen.add(baseline)
+    return pool
+
+
+def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
+    """Call Cerebras with retries + model rotation + KEY POOL rotation.
+    Tries each team member's personal key in turn when one is rate-limited.
+    Returns (text, error)."""
+    keys = _collect_cerebras_keys()
+    if not keys:
+        return None, "No Cerebras keys (pool empty)"
 
     preferences = [
         'qwen-3-235b-a22b-instruct-2507',
@@ -295,27 +309,36 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
         'llama3.1-70b',
         'llama3.1-8b',
     ]
-    if available:
-        # Use whatever the API lists, ordered by our preference where overlap exists
-        ordered = [m for m in preferences if m in available]
-        leftovers = [m for m in available if m not in preferences]
-        models_to_try = ordered + leftovers
-    else:
-        models_to_try = preferences
-
-    # Skip models we already proved don't work this session
-    models_to_try = [m for m in models_to_try if m not in _CEREBRAS_BAD_MODELS]
-    if not models_to_try:
-        models_to_try = ['llama3.1-8b']
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
     last_err = ""
 
-    # Up to 3 attempts; rotate through models each pass; sleep between passes
-    for attempt in range(3):
+    # OUTER LOOP: rotate through team-member keys
+    for key_idx, (api_key, owner_email) in enumerate(keys):
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Discover available models for THIS key
+        available = []
+        try:
+            mr = requests.get(f"{CEREBRAS_BASE_URL}/models",
+                              headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+            if mr.status_code == 200:
+                available = [m['id'] for m in mr.json().get('data', [])]
+        except Exception:
+            pass
+
+        if available:
+            ordered = [m for m in preferences if m in available]
+            leftovers = [m for m in available if m not in preferences]
+            models_to_try = ordered + leftovers
+        else:
+            models_to_try = list(preferences)
+        models_to_try = [m for m in models_to_try if m not in _CEREBRAS_BAD_MODELS]
+        if not models_to_try:
+            models_to_try = ['llama3.1-8b']
+
+        rate_limited_this_key = False
         for model in list(models_to_try):
             try:
                 r = requests.post(
@@ -330,21 +353,30 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
                     timeout=45,
                 )
                 if r.status_code == 200:
+                    if owner_email:
+                        try:
+                            import database
+                            database.team_keys_mark_ok(owner_email, 'cerebras')
+                        except Exception:
+                            pass
                     return r.json()['choices'][0]['message']['content'], None
                 last_err = f"Cerebras {r.status_code} on {model}: {r.text[:120]}"
-                # 404: model doesn't exist or no access → cache so we never retry it
                 if r.status_code == 404:
                     _CEREBRAS_BAD_MODELS.add(model)
-                    if model in models_to_try:
-                        models_to_try.remove(model)
                     continue
-                # 429/503: rate-limited → try next model, retry later
                 if r.status_code in (429, 503):
+                    rate_limited_this_key = True
                     continue
-                # 400 model_too_big or context errors → try smaller model
                 if r.status_code == 400:
                     continue
-                # 401/403 → auth issue, no point retrying
+                # 401/403 → this KEY is bad, jump to next key
+                if owner_email and r.status_code in (401, 403):
+                    try:
+                        import database
+                        database.team_keys_mark_err(owner_email, 'cerebras', last_err)
+                    except Exception:
+                        pass
+                    break
                 break
             except requests.Timeout:
                 last_err = f"Cerebras timeout on {model}"
@@ -352,12 +384,36 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
             except Exception as e:
                 last_err = f"Cerebras error on {model}: {str(e)[:100]}"
                 continue
-        # Refresh the list after culling 404s
-        models_to_try = [m for m in models_to_try if m not in _CEREBRAS_BAD_MODELS]
-        if not models_to_try:
-            break
-        if attempt < 2:
-            time.sleep(1.5 * (attempt + 1))
+
+        if rate_limited_this_key and owner_email:
+            try:
+                import database
+                database.team_keys_mark_err(owner_email, 'cerebras', last_err)
+            except Exception:
+                pass
+        # Move on to next key in the pool. No sleep — different key, different bucket.
+
+    # All keys exhausted. One backoff retry across the whole pool.
+    time.sleep(1.5)
+    for api_key, owner_email in keys:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        for model in ['llama3.1-8b']:  # safest fallback model on retry
+            try:
+                r = requests.post(
+                    f"{CEREBRAS_BASE_URL}/chat/completions",
+                    headers=headers,
+                    json={"model": model, "messages": messages,
+                          "max_tokens": max_tokens, "temperature": temperature},
+                    timeout=30,
+                )
+                if r.status_code == 200:
+                    return r.json()['choices'][0]['message']['content'], None
+                last_err = f"Cerebras {r.status_code} on {model} (retry): {r.text[:80]}"
+            except Exception as e:
+                last_err = f"Cerebras retry error: {str(e)[:80]}"
 
     return None, last_err
 

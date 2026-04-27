@@ -148,6 +148,23 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_aqua_memory_user ON aqua_user_memory(user_email)')
 
+    # Team-member API key pool — each team member's personal Cerebras/Groq/Claude keys.
+    # When the team's shared free quota gets throttled, Aqua rotates through everyone's
+    # personal keys so capacity scales with team size.
+    c.execute('''CREATE TABLE IF NOT EXISTS team_api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        label TEXT,
+        last_ok_at TEXT,
+        last_err_at TEXT,
+        last_err TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_email, provider)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_team_keys_provider ON team_api_keys(provider)')
+
     conn.commit()
     conn.close()
 
@@ -228,6 +245,109 @@ def aqua_forget_fact(fact_id):
     conn = get_connection()
     c = conn.cursor()
     c.execute('DELETE FROM aqua_user_memory WHERE id = ?', (fact_id,))
+    conn.commit()
+    conn.close()
+
+
+# ============================================================================
+# Team API key pool — each team member adds their own free Cerebras/Groq/Claude
+# key. Aqua rotates through all of them when the shared quota is throttled.
+# ============================================================================
+def team_keys_save(user_email, provider, api_key, label=None):
+    """Save (or replace) one team member's key for a given provider."""
+    if not user_email or not provider or not api_key:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO team_api_keys (user_email, provider, api_key, label)
+                 VALUES (?,?,?,?)
+                 ON CONFLICT(user_email, provider)
+                 DO UPDATE SET api_key=excluded.api_key,
+                               label=excluded.label,
+                               last_err=NULL,
+                               last_err_at=NULL''',
+              (user_email.lower(), provider, api_key.strip(), label))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def team_keys_get_for_user(user_email, provider):
+    """Get one team member's key for a given provider (or None)."""
+    if not user_email or not provider:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT api_key FROM team_api_keys
+                 WHERE user_email = ? AND provider = ?''',
+              (user_email.lower(), provider))
+    row = c.fetchone()
+    conn.close()
+    return row['api_key'] if row else None
+
+
+def team_keys_get_pool(provider):
+    """Get ALL connected team keys for a provider, ordered by least-recently-failed."""
+    if not provider:
+        return []
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT user_email, api_key, label, last_ok_at, last_err_at
+                 FROM team_api_keys
+                 WHERE provider = ?
+                 ORDER BY COALESCE(last_err_at, '0') ASC,
+                          COALESCE(last_ok_at, '0') DESC''', (provider,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def team_keys_list_all():
+    """List all team keys for the Setup UI (without exposing the actual secret)."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT user_email, provider, label, last_ok_at, last_err_at, last_err,
+                          created_at,
+                          substr(api_key, 1, 8) || '...' || substr(api_key, -4) as masked_key
+                 FROM team_api_keys
+                 ORDER BY provider, user_email''')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def team_keys_delete(user_email, provider):
+    if not user_email or not provider:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM team_api_keys WHERE user_email = ? AND provider = ?',
+              (user_email.lower(), provider))
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    return n > 0
+
+
+def team_keys_mark_ok(user_email, provider):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''UPDATE team_api_keys
+                 SET last_ok_at = CURRENT_TIMESTAMP, last_err = NULL, last_err_at = NULL
+                 WHERE user_email = ? AND provider = ?''',
+              (user_email.lower(), provider))
+    conn.commit()
+    conn.close()
+
+
+def team_keys_mark_err(user_email, provider, error_text):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''UPDATE team_api_keys
+                 SET last_err_at = CURRENT_TIMESTAMP, last_err = ?
+                 WHERE user_email = ? AND provider = ?''',
+              ((error_text or '')[:200], user_email.lower(), provider))
     conn.commit()
     conn.close()
 

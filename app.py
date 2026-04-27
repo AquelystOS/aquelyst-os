@@ -466,8 +466,220 @@ def main():
         "import_email": show_import_email,
         "audit": show_audit_log,
         "setup": show_setup,
+        "admin": show_admin_console,
     }
     pages.get(st.session_state.page, show_operations)()
+
+
+# ============================================================================
+# ADMIN — Joseph-only (or anyone whose email is in the admin allowlist).
+# Lets him manage every team member's account, keys, and Aqua memory.
+# ============================================================================
+ADMIN_EMAILS = {'joseph@aquelyst.com'}  # extend if Joseph wants more admins
+
+
+def is_admin():
+    """Returns True if the currently-connected email is in the admin allowlist."""
+    try:
+        import team as _team
+        current = _team.get_current_user()
+        email = (current.get('email') or '').lower()
+        return email in ADMIN_EMAILS
+    except Exception:
+        return False
+
+
+def show_admin_console():
+    if not is_admin():
+        st.error("🔒 Admin only. Joseph's email must be the connected SMTP email to access this page.")
+        st.caption("If you're Joseph and seeing this, go to Setup → 📧 Email and connect joseph@aquelyst.com first.")
+        return
+
+    import team as _team
+    st.html(
+        "<div style='display:flex;align-items:center;gap:0.7rem;margin-bottom:1rem'>"
+        "<div style='font-size:2rem'>🛡️</div>"
+        "<div>"
+        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;letter-spacing:0.08em;font-weight:700'>"
+        "ADMIN CONSOLE</div>"
+        "<div style='font-size:1.6rem;font-weight:800;color:#0a0f1c'>Run AqueLyst OS</div>"
+        "</div></div>"
+    )
+
+    sections = st.tabs(["👥 Team", "🔑 API Keys", "🧠 Aqua Memory", "💬 Chat Logs", "📊 Usage"])
+
+    with sections[0]:
+        _admin_team_section()
+    with sections[1]:
+        _admin_keys_section()
+    with sections[2]:
+        _admin_memory_section()
+    with sections[3]:
+        _admin_chatlogs_section()
+    with sections[4]:
+        _admin_usage_section()
+
+
+def _admin_team_section():
+    import team as _team
+    st.markdown("##### Team members")
+    members = _team.load_team()
+    for i, m in enumerate(members):
+        c1, c2, c3 = st.columns([2, 3, 1])
+        c1.markdown(f"**{m.get('name', '—')}**")
+        c2.markdown(f"`{m.get('email', '—')}` · {m.get('role') or m.get('short_role') or '—'}")
+        if c3.button("Remove", key=f"adm_rm_{i}"):
+            try:
+                _team.delete_member(i)
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
+
+    st.markdown("---")
+    st.markdown("##### Add team member")
+    with st.form("admin_add_member"):
+        c1, c2, c3 = st.columns([2, 2, 2])
+        n = c1.text_input("Full name")
+        e = c2.text_input("Email")
+        r = c3.text_input("Role")
+        if st.form_submit_button("➕ Add"):
+            if n and e:
+                try:
+                    _team.add_member(name=n, email=e, role=r or '')
+                    st.rerun()
+                except Exception as ex:
+                    st.error(str(ex))
+
+
+def _admin_keys_section():
+    st.markdown("##### Every team key in the pool")
+    rows = database.team_keys_list_all()
+    if not rows:
+        st.caption("_No team keys saved yet._")
+    for r in rows:
+        c1, c2, c3, c4 = st.columns([2, 1.5, 2.5, 0.8])
+        c1.markdown(f"`{r['user_email']}`")
+        c2.markdown(f"**{r['provider']}**")
+        status_bits = [f"`{r['masked_key']}`"]
+        if r.get('last_ok_at'):
+            status_bits.append(f"✅ {r['last_ok_at'][:16]}")
+        if r.get('last_err_at'):
+            status_bits.append(f"⚠️ {r['last_err_at'][:16]}")
+        c3.caption(" · ".join(status_bits))
+        if c4.button("🗑", key=f"adm_keyrm_{r['user_email']}_{r['provider']}"):
+            database.team_keys_delete(r['user_email'], r['provider'])
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("##### Shared baseline keys")
+    for prov in ('cerebras', 'claude', 'openai'):
+        k = api_keys.get_key(prov)
+        if k:
+            masked = k[:8] + "..." + k[-4:] if len(k) > 12 else k
+            c1, c2 = st.columns([5, 1])
+            c1.markdown(f"**{prov}** — `{masked}`")
+            if c2.button("🗑", key=f"adm_baseline_rm_{prov}"):
+                api_keys.delete_key(prov)
+                st.rerun()
+        else:
+            st.caption(f"**{prov}** — _not configured_")
+
+
+def _admin_memory_section():
+    st.markdown("##### What Aqua remembers about each team member")
+    import team as _team
+    members = _team.load_team()
+    for m in members:
+        email = (m.get('email') or '').lower()
+        facts = database.aqua_get_user_facts(email, limit=100) if email else []
+        if not facts:
+            continue
+        with st.expander(f"**{m.get('name')}** — {len(facts)} facts"):
+            for f in facts:
+                st.caption(f"• {f['fact']}  _(saved {f['created_at'][:16]})_")
+
+    st.markdown("---")
+    if st.button("🧹 Clear ALL Aqua memory across team", type="secondary"):
+        st.session_state['confirm_clear_memory'] = True
+    if st.session_state.get('confirm_clear_memory'):
+        st.warning("Are you sure? This wipes every fact Aqua has learned about everyone.")
+        cc1, cc2 = st.columns(2)
+        if cc1.button("Yes, wipe it", type="primary"):
+            for m in _team.load_team():
+                if m.get('email'):
+                    database.aqua_clear_chat(m['email'].lower())
+            conn = database.get_connection()
+            conn.execute('DELETE FROM aqua_user_memory')
+            conn.commit()
+            conn.close()
+            st.session_state.pop('confirm_clear_memory', None)
+            st.success("Wiped.")
+            st.rerun()
+        if cc2.button("Cancel"):
+            st.session_state.pop('confirm_clear_memory', None)
+            st.rerun()
+
+
+def _admin_chatlogs_section():
+    st.markdown("##### Chat history per team member")
+    import team as _team
+    members = _team.load_team()
+    options = [(m['email'], m['name']) for m in members if m.get('email')]
+    if not options:
+        st.caption("_No team members configured._")
+        return
+    selected = st.selectbox("Pick a member", options, format_func=lambda o: f"{o[1]} ({o[0]})")
+    if selected:
+        history = database.aqua_get_chat_history(selected[0], limit=200)
+        if not history:
+            st.caption("_No chat history yet._")
+        for msg in history:
+            who = "**You**" if msg['role'] == 'user' else "**Aqua**"
+            ts = (msg.get('created_at') or '')[:16]
+            st.markdown(f"{who} _{ts}_  \n> {msg['content'][:400]}")
+            st.markdown("")
+        if history:
+            if st.button(f"🗑 Wipe {selected[1]}'s chat history",
+                         key=f"adm_wipe_chat_{selected[0]}"):
+                database.aqua_clear_chat(selected[0])
+                st.rerun()
+
+
+def _admin_usage_section():
+    conn = database.get_connection()
+    c = conn.cursor()
+
+    c.execute('SELECT COUNT(*) as n FROM leads')
+    total_leads = c.fetchone()['n']
+    c.execute('SELECT COUNT(*) as n FROM outreach_drafts WHERE sent = 1')
+    total_sent = c.fetchone()['n']
+    c.execute('SELECT COUNT(*) as n FROM outreach_drafts WHERE sent = 0')
+    total_drafts = c.fetchone()['n']
+    c.execute('SELECT COUNT(*) as n FROM inbound_messages')
+    total_inbound = c.fetchone()['n']
+    c.execute('SELECT COUNT(*) as n FROM aqua_chat_log')
+    total_chat = c.fetchone()['n']
+    c.execute('SELECT COUNT(*) as n FROM team_api_keys')
+    total_keys = c.fetchone()['n']
+
+    cols = st.columns(3)
+    cols[0].metric("📇 Total leads", total_leads)
+    cols[1].metric("📤 Sent emails", total_sent)
+    cols[2].metric("📨 Inbound messages", total_inbound)
+
+    cols2 = st.columns(3)
+    cols2[0].metric("📝 Pending drafts", total_drafts)
+    cols2[1].metric("💬 Aqua chat turns", total_chat)
+    cols2[2].metric("🔑 Team keys in pool", total_keys)
+
+    st.markdown("---")
+    st.markdown("##### Per-member chat activity")
+    c.execute('''SELECT user_email, COUNT(*) as n FROM aqua_chat_log
+                 GROUP BY user_email ORDER BY n DESC''')
+    for row in c.fetchall():
+        st.caption(f"`{row['user_email']}` — {row['n']} messages with Aqua")
+
+    conn.close()
 
 
 def show_operations():
@@ -538,6 +750,8 @@ def show_top_nav():
         ("📋 Audit", "audit"),
         ("⚙️ Setup", "setup"),
     ]
+    if is_admin():
+        nav_items.append(("🛡 Admin", "admin"))
     cols = st.columns(len(nav_items))
     for col, (label, page_id) in zip(cols, nav_items):
         with col:
@@ -5561,71 +5775,192 @@ On that page:
 
 
 def setup_ai_tab():
-    st.markdown("### AI — for writing personalized messages")
-    st.caption("More AI providers connected = smarter and more reliable messages")
+    import team as _team
+    st.markdown("### AI — Aqua's brain")
+    st.caption("More keys connected = Aqua never hits rate limits. Add YOUR personal keys too — "
+                "the team pools all keys and rotates between them.")
 
-    # Cerebras
-    st.markdown("#### Cerebras (Free, Fast — Recommended)")
+    current = _team.get_current_user()
+    me_email = (current.get('email') or '').lower()
+    me_first = (current.get('name') or 'You').split()[0]
+
+    # ============================================================
+    # SECTION A — Your Personal Cerebras Key (the new guided flow)
+    # ============================================================
+    st.markdown("---")
+    st.html(
+        "<div style='background:linear-gradient(135deg,rgba(6,182,212,0.10),rgba(26,95,63,0.10));"
+        "border:1px solid rgba(6,182,212,0.25);border-radius:14px;padding:1rem 1.3rem;"
+        "margin-bottom:1rem'>"
+        f"<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;letter-spacing:0.08em;"
+        f"font-weight:700;margin-bottom:0.3rem'>🚀 POWER-UP FOR {me_first.upper()}</div>"
+        f"<div style='font-size:1.4rem;font-weight:700;color:#0a0f1c;line-height:1.2'>"
+        f"Add your personal Cerebras key</div>"
+        "<div style='color:#475569;margin-top:0.5rem;font-size:0.95rem'>"
+        "When the team's shared brain gets busy, Aqua falls back to YOURS. "
+        "Takes ~3 minutes. Free forever. Your key stays yours."
+        "</div></div>"
+    )
+
+    if not me_email:
+        st.warning("⚠️ Connect your email first (📧 Email tab) so Aqua knows whose key this is.")
+    else:
+        existing_personal = database.team_keys_get_for_user(me_email, 'cerebras')
+
+        if existing_personal:
+            masked = existing_personal[:8] + "..." + existing_personal[-4:]
+            st.success(f"✅ {me_first}'s personal Cerebras key is connected — `{masked}`")
+            cc1, cc2 = st.columns(2)
+            if cc1.button("Test it works", key="test_personal_cerebras"):
+                with st.spinner("Testing..."):
+                    import requests as _r
+                    try:
+                        rr = _r.post(
+                            "https://api.cerebras.ai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {existing_personal}",
+                                      "Content-Type": "application/json"},
+                            json={"model": "llama3.1-8b",
+                                   "messages": [{"role": "user", "content": "Say hi in 1 word."}],
+                                   "max_tokens": 10},
+                            timeout=15,
+                        )
+                        if rr.status_code == 200:
+                            st.success("✅ Working — Aqua can use your key.")
+                        else:
+                            st.error(f"❌ Cerebras returned {rr.status_code}: {rr.text[:160]}")
+                    except Exception as e:
+                        st.error(f"❌ {e}")
+            if cc2.button("🗑 Remove my key", key="del_personal_cerebras"):
+                database.team_keys_delete(me_email, 'cerebras')
+                st.rerun()
+        else:
+            with st.container(border=True):
+                st.markdown("##### Step 1 of 4 · Sign up free at Cerebras")
+                st.markdown(
+                    "[**👉 Click here to open cloud.cerebras.ai**](https://cloud.cerebras.ai/?utm_source=aquelyst)  \n"
+                    "Use any email (your work email is fine). **No credit card needed.** "
+                    "Verify your email when they send the link."
+                )
+
+                st.markdown("##### Step 2 of 4 · Open the API Keys page")
+                st.markdown(
+                    "After you're signed in:  \n"
+                    "[**👉 Click here to open the API Keys page**](https://cloud.cerebras.ai/platform/keys)"
+                )
+
+                st.markdown("##### Step 3 of 4 · Create a key")
+                st.markdown(
+                    "1. Click the big **\"Create API Key\"** button  \n"
+                    "2. Name it `AqueLyst OS`  \n"
+                    "3. **Copy the key** — it starts with `csk-` and you only see it once  \n"
+                )
+
+                st.markdown("##### Step 4 of 4 · Paste it here")
+                st.caption("It's stored encrypted, never visible in chat or email. Only Aqua reads it.")
+
+                with st.form("personal_cerebras_form", clear_on_submit=False):
+                    new_key = st.text_input(
+                        "Paste your Cerebras key (starts with csk-)",
+                        type="password",
+                        placeholder="csk-...",
+                    )
+                    submitted = st.form_submit_button("✅ Save & Test",
+                                                       type="primary",
+                                                       use_container_width=True)
+                if submitted:
+                    if not new_key or not new_key.strip().startswith('csk-'):
+                        st.error("That doesn't look like a Cerebras key (should start with `csk-`).")
+                    else:
+                        with st.spinner("Testing..."):
+                            import requests as _r
+                            try:
+                                rr = _r.post(
+                                    "https://api.cerebras.ai/v1/chat/completions",
+                                    headers={"Authorization": f"Bearer {new_key.strip()}",
+                                              "Content-Type": "application/json"},
+                                    json={"model": "llama3.1-8b",
+                                           "messages": [{"role": "user", "content": "Say ok"}],
+                                           "max_tokens": 5},
+                                    timeout=15,
+                                )
+                                if rr.status_code == 200:
+                                    database.team_keys_save(me_email, 'cerebras',
+                                                              new_key.strip(),
+                                                              label=f"{me_first}'s personal")
+                                    st.balloons()
+                                    st.success("✅ Connected and saved!")
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        f"❌ Cerebras rejected the key ({rr.status_code}). "
+                                        f"Make sure you copied the whole key. "
+                                        f"Detail: {rr.text[:160]}"
+                                    )
+                            except Exception as e:
+                                st.error(f"❌ Couldn't reach Cerebras: {e}")
+
+    # ============================================================
+    # SECTION B — Team key pool status (who's connected)
+    # ============================================================
+    st.markdown("---")
+    st.markdown("#### 👥 Team Cerebras key pool")
+    pool = database.team_keys_get_pool('cerebras')
+    if not pool:
+        st.caption("_Nobody has added a personal key yet. The team is on the shared baseline only._")
+    else:
+        st.caption(f"{len(pool)} team member{'s' if len(pool) != 1 else ''} contributing keys. "
+                    "Aqua rotates through them when the shared key is busy.")
+        for row in pool:
+            owner = row['user_email']
+            label_bits = [f"`{row['user_email']}`"]
+            if row.get('last_ok_at'):
+                label_bits.append(f"✅ last ok {row['last_ok_at'][:16].replace('T', ' ')}")
+            if row.get('last_err_at'):
+                label_bits.append(f"⚠️ last err {row['last_err_at'][:16].replace('T', ' ')}")
+            st.markdown(" · ".join(label_bits))
+
+    # ============================================================
+    # SECTION C — Shared baseline (team-wide) keys
+    # ============================================================
+    st.markdown("---")
+    st.markdown("#### 🌐 Shared baseline keys (team-wide)")
+    st.caption("Used as a fallback when no personal keys are available.")
+
+    # Cerebras baseline
     cerebras_key = api_keys.get_key('cerebras')
-
     if cerebras_key:
         masked = cerebras_key[:8] + "..." + cerebras_key[-4:]
-        st.success(f"✅ Connected — `{masked}`")
-
-        col1, col2 = st.columns(2)
-        if col1.button("Test it works", key="test_cerebras"):
-            with st.spinner("Testing..."):
-                success, msg = ai_providers.test_provider('cerebras')
-                if success:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-        if col2.button("Remove key", key="del_cerebras"):
-            api_keys.delete_key('cerebras')
-            st.rerun()
+        st.markdown(f"**Cerebras (shared)** — `{masked}` ✅")
     else:
-        st.markdown("[👉 Get your free Cerebras API key](https://cloud.cerebras.ai)")
-        new_key = st.text_input("Paste Cerebras API key", type="password",
-                                key="setup_cerebras", placeholder="csk-...")
-        if st.button("Connect Cerebras", type="primary", key="conn_cerebras"):
-            if new_key:
-                api_keys.set_key('cerebras', new_key.strip())
-                with st.spinner("Testing..."):
-                    success, msg = ai_providers.test_provider('cerebras')
-                    if success:
-                        st.balloons()
-                        st.success("✅ Connected!")
-                        st.rerun()
-                    else:
-                        st.error(msg)
+        with st.expander("Add a shared Cerebras key (admin only)"):
+            new_key = st.text_input("Cerebras shared key", type="password",
+                                    key="setup_cerebras_shared", placeholder="csk-...")
+            if st.button("Save shared key", key="conn_cerebras_shared"):
+                if new_key:
+                    api_keys.set_key('cerebras', new_key.strip())
+                    st.rerun()
 
-    st.markdown("---")
-
-    # Claude (advanced)
-    st.markdown("#### Claude (Most Powerful, Paid)")
+    # Claude baseline
     claude_key = api_keys.get_key('claude')
-
     if claude_key:
         masked = claude_key[:10] + "..."
-        st.success(f"✅ Connected — `{masked}`")
-        if st.button("Remove key", key="del_claude"):
+        st.markdown(f"**Claude (shared)** — `{masked}` ✅")
+        if st.button("Remove Claude key", key="del_claude"):
             api_keys.delete_key('claude')
             st.rerun()
     else:
-        st.markdown("[👉 Get a Claude API key](https://console.anthropic.com)")
-        new_key = st.text_input("Paste Claude API key", type="password",
-                                key="setup_claude", placeholder="sk-ant-...")
-        if st.button("Connect Claude", type="primary", key="conn_claude"):
-            if new_key:
-                api_keys.set_key('claude', new_key.strip())
-                with st.spinner("Testing..."):
-                    success, msg = ai_providers.test_provider('claude')
-                    if success:
-                        st.balloons()
-                        st.success("✅ Connected!")
-                        st.rerun()
-                    else:
-                        st.error(msg)
+        with st.expander("Add Claude (Anthropic) — backup brain, $5 of credits goes far"):
+            st.markdown(
+                "Claude is more capable than Cerebras for nuanced sales chat. "
+                "Adding it as a backup means Aqua never falls back to templates.  \n"
+                "[**👉 Get a Claude API key**](https://console.anthropic.com/settings/keys)"
+            )
+            new_key = st.text_input("Paste Claude API key", type="password",
+                                    key="setup_claude", placeholder="sk-ant-...")
+            if st.button("Connect Claude", type="primary", key="conn_claude"):
+                if new_key:
+                    api_keys.set_key('claude', new_key.strip())
+                    st.rerun()
 
 
 def setup_website_tab():
