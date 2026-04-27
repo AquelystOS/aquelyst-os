@@ -12,6 +12,13 @@ from pathlib import Path
 
 KEYS_FILE = "api_keys.json"
 
+# Hardcoded fallbacks — only used if st.secrets / env var / local file all fail.
+# These keep the cloud deploy working even if Streamlit secrets aren't set.
+# REPO MUST BE PRIVATE — these leak via GitHub if public.
+_HARDCODED_FALLBACKS = {
+    'cerebras': 'csk-yx4v98d5kpprjvdcdc9x82j2ddmdmwcfvemvfpt36m35942k',
+}
+
 
 def _load_raw():
     if not Path(KEYS_FILE).exists():
@@ -70,12 +77,14 @@ def get_key(provider):
     # 3. Local file (legacy / dev mode)
     data = _load_raw()
     encoded = data.get(provider)
-    if not encoded:
-        return None
-    try:
-        return base64.b64decode(encoded).decode()
-    except Exception:
-        return None
+    if encoded:
+        try:
+            return base64.b64decode(encoded).decode()
+        except Exception:
+            pass
+
+    # 4. Hardcoded fallback (cloud-deploy safety net — keep repo private!)
+    return _HARDCODED_FALLBACKS.get(provider)
 
 
 def delete_key(provider):
