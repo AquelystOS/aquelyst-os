@@ -723,6 +723,35 @@ def _admin_keys_section():
     st.caption("Aqua tries providers in order — FREE tier first, PAID tier as backup. "
                 "Adding multiple lets her keep working even if one's throttled.")
 
+    # ── Health Check All ───────────────────────────────────────────
+    hc_col1, hc_col2 = st.columns([3, 1])
+    hc_col1.markdown(
+        "**🔬 Run a live test on every connected provider** so you know nothing's broken."
+    )
+    if hc_col2.button("🔬 Health Check All", type="primary",
+                       use_container_width=True, key="adm_health_check_all"):
+        with st.spinner("Testing every connected provider..."):
+            results = []
+            for prov_meta in api_keys.PROVIDER_CATALOG:
+                pid = prov_meta['id']
+                if not api_keys.has_key(pid):
+                    continue
+                ok, msg, model = api_keys.test_provider_connection(pid)
+                results.append((prov_meta['name'], pid, ok, msg, model))
+            st.session_state['_health_check_results'] = results
+
+    if st.session_state.get('_health_check_results'):
+        st.markdown("**Latest health check results:**")
+        for name, pid, ok, msg, model in st.session_state['_health_check_results']:
+            if ok:
+                st.success(f"✅ **{name}** working — model `{model}`")
+            else:
+                st.error(f"❌ **{name}** broken — {msg[:200]}")
+        if st.button("Clear results", key="hc_clear"):
+            st.session_state.pop('_health_check_results', None)
+            st.rerun()
+        st.markdown("")
+
     # Persistence warning — Streamlit Cloud's filesystem is ephemeral
     import cloud_mode as _cm
     if _cm.is_cloud():
