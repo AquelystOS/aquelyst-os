@@ -1487,8 +1487,9 @@ def _autopilot_live_fragment():
 
 def _render_autopilot_drill(drill):
     """Show the records behind an autopilot stat card."""
+    state = autopilot.get_state()
     log = autopilot.read_log()
-    recent = autopilot.get_state().get('recent_leads', [])
+    recent = state.get('recent_leads', [])
 
     drill_filters = {
         'discovered': lambda e: e.get('type') == 'discovery',
