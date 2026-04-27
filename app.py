@@ -2893,7 +2893,8 @@ def _render_inbound_card(msg, is_team=False):
                     st.markdown(f"### 💬 Full thread ({len(thread)} messages)")
                     lead_for_thread = database.get_lead(msg['lead_id'])
                     if lead_for_thread:
-                        _render_conversation_thread(thread, lead_for_thread)
+                        _render_conversation_thread(thread, lead_for_thread,
+                                                     key_ns=f"inbox_{msg['id']}")
 
 
 def _show_escalations(all_pending):
@@ -3616,7 +3617,7 @@ def show_customer_detail():
         if not thread:
             st.caption("No emails exchanged yet. When you send or receive a message, it'll show here.")
         else:
-            _render_conversation_thread(thread, lead)
+            _render_conversation_thread(thread, lead, key_ns=f"detail_{lead_id}")
 
     # History (activities log)
     with st.expander("📜 Activity log"):
@@ -3676,8 +3677,13 @@ def show_customer_detail():
 # ===========================================================================
 # SEND MESSAGE
 # ===========================================================================
-def _render_conversation_thread(thread, lead):
-    """Render the conversation as chat bubbles — outgoing right, incoming left."""
+def _render_conversation_thread(thread, lead, key_ns=""):
+    """Render the conversation as chat bubbles — outgoing right, incoming left.
+
+    key_ns: optional namespace appended to widget keys so the same thread
+    rendered from multiple parent contexts (e.g., separate inbox cards) doesn't
+    collide on Streamlit element IDs.
+    """
 
     contact_name = (lead['contact_name'] or 'them').split()[0] if lead['contact_name'] else 'them'
 
@@ -3742,7 +3748,7 @@ def _render_conversation_thread(thread, lead):
                 lead_email = None
             if is_draft and lead_email:
                 _spc, b1, b2, b3 = st.columns([1, 1, 1, 1])
-                if b1.button("📤 Send Now", type="primary", key=f"thread_send_{msg['id']}",
+                if b1.button("📤 Send Now", type="primary", key=f"thread_send_{key_ns}_{msg['id']}",
                               use_container_width=True):
                     if smtp_sender.is_configured():
                         if database.is_suppressed(lead['email']):
@@ -3766,11 +3772,11 @@ def _render_conversation_thread(thread, lead):
                                     st.error(translate_smtp_error(send_msg))
                     else:
                         st.error("Email not configured.")
-                if b2.button("✏️ Edit in Compose", key=f"thread_edit_{msg['id']}",
+                if b2.button("✏️ Edit in Compose", key=f"thread_edit_{key_ns}_{msg['id']}",
                               use_container_width=True):
                     st.session_state.page = "send_message"
                     st.rerun()
-                if b3.button("🗑️ Discard", key=f"thread_discard_{msg['id']}",
+                if b3.button("🗑️ Discard", key=f"thread_discard_{key_ns}_{msg['id']}",
                               use_container_width=True):
                     conn = database.get_connection()
                     cur = conn.cursor()
