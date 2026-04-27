@@ -923,6 +923,248 @@ def scrape_yellowpages(business_type, location):
         return []
 
 
+def scrape_manta(business_type, location, max_results=30):
+    """Scrape Manta.com — business directory with company websites."""
+    if not location:
+        location = ""
+    q = quote_plus(f"{business_type} {location}".strip())
+    url = f"https://www.manta.com/search?search={q}"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT,
+                                         "Accept": "text/html"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        results = []
+        seen_domains = set()
+        # Manta business profile cards have website links and titles
+        patterns = [
+            r'<a[^>]+href="(https?://[^"]+)"[^>]+class="[^"]*business-website[^"]*"[^>]*>([^<]+)',
+            r'<a[^>]+class="[^"]*website[^"]*"[^>]+href="(https?://[^"]+)"[^>]*>([^<]+)',
+            r'href="(https?://(?!(?:www\.)?manta\.com)[^"]+)"[^>]*>([A-Z][^<]{3,80})</a>',
+        ]
+        for pat in patterns:
+            for m in re.findall(pat, r.text):
+                u, t = (m, '') if isinstance(m, str) else (m[0], m[1] if len(m) > 1 else '')
+                if _should_skip(u):
+                    continue
+                d = _domain_of(u)
+                if not d or d in seen_domains:
+                    continue
+                seen_domains.add(d)
+                results.append({'url': u, 'title': (t.strip() or d)[:80],
+                                'snippet': f'Listed on Manta as {business_type}'})
+                if len(results) >= max_results:
+                    return results
+        return results
+    except Exception:
+        return []
+
+
+def scrape_bbb(business_type, location, max_results=30):
+    """Scrape Better Business Bureau — listings include business websites."""
+    if not location:
+        location = "USA"
+    q = quote_plus(business_type)
+    loc = quote_plus(location)
+    url = f"https://www.bbb.org/search?find_country=USA&find_text={q}&find_loc={loc}"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT,
+                                         "Accept": "text/html"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        results = []
+        seen_domains = set()
+        # BBB business profile cards link to /us/state/city/category/{slug} pages
+        # which then link to the business's actual website
+        profile_pattern = r'href="(https?://www\.bbb\.org/us/[^"]+)"'
+        profiles = re.findall(profile_pattern, r.text)[:max_results]
+        for prof_url in profiles[:max_results]:
+            try:
+                pr = requests.get(prof_url, headers={"User-Agent": USER_AGENT},
+                                   timeout=REQUEST_TIMEOUT)
+                if pr.status_code != 200:
+                    continue
+                # Extract business website from profile page
+                m = re.search(r'href="(https?://(?!(?:www\.)?bbb\.org)[^"]+)"[^>]*>'
+                              r'\s*(?:Visit\s+Website|Website)\s*<', pr.text)
+                if not m:
+                    m = re.search(r'<a[^>]+rel="[^"]*nofollow[^"]*"[^>]+'
+                                  r'href="(https?://[^"]+)"', pr.text)
+                if m:
+                    u = m.group(1)
+                    if _should_skip(u):
+                        continue
+                    d = _domain_of(u)
+                    if not d or d in seen_domains:
+                        continue
+                    seen_domains.add(d)
+                    # Extract business name from <title>
+                    name_m = re.search(r'<title>([^<|]+)\s*[\|<]', pr.text)
+                    name = (name_m.group(1).strip() if name_m else d)[:80]
+                    results.append({'url': u, 'title': name,
+                                    'snippet': f'BBB-listed {business_type}'})
+                if len(results) >= max_results:
+                    break
+                time.sleep(0.3)
+            except Exception:
+                continue
+        return results
+    except Exception:
+        return []
+
+
+def scrape_superpages(business_type, location, max_results=30):
+    """Scrape SuperPages.com — yellow pages alternative with direct websites."""
+    if not location:
+        location = "United States"
+    q = quote_plus(business_type)
+    loc = quote_plus(location)
+    url = f"https://www.superpages.com/search?search_terms={q}&geo_location_terms={loc}"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+                          timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        results = []
+        seen_domains = set()
+        for m in re.findall(
+            r'href="(https?://[^"]+)"[^>]+class="[^"]*website-link[^"]*"', r.text):
+            if _should_skip(m):
+                continue
+            d = _domain_of(m)
+            if not d or d in seen_domains:
+                continue
+            seen_domains.add(d)
+            results.append({'url': m, 'title': d, 'snippet': f'SuperPages {business_type}'})
+            if len(results) >= max_results:
+                break
+        # Generic external links if specific class didn't match
+        if len(results) < 5:
+            for m in re.findall(r'href="(https?://(?!(?:www\.)?superpages)[^"]+)"', r.text):
+                if _should_skip(m):
+                    continue
+                d = _domain_of(m)
+                if not d or d in seen_domains:
+                    continue
+                seen_domains.add(d)
+                results.append({'url': m, 'title': d, 'snippet': f'SuperPages {business_type}'})
+                if len(results) >= max_results:
+                    break
+        return results
+    except Exception:
+        return []
+
+
+def scrape_merchantcircle(business_type, location, max_results=30):
+    """Scrape MerchantCircle.com — small business directory."""
+    if not location:
+        location = ""
+    q = quote_plus(f"{business_type} {location}".strip())
+    url = f"https://www.merchantcircle.com/search.html?qs={q}"
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
+        if r.status_code != 200:
+            return []
+        results = []
+        seen_domains = set()
+        for m in re.findall(
+            r'href="(https?://(?!(?:www\.)?merchantcircle)[^"]+)"[^>]*>([^<]{3,80})</a>',
+            r.text):
+            u, t = m[0], m[1].strip()
+            if _should_skip(u):
+                continue
+            d = _domain_of(u)
+            if not d or d in seen_domains:
+                continue
+            seen_domains.add(d)
+            results.append({'url': u, 'title': t or d,
+                            'snippet': f'MerchantCircle {business_type}'})
+            if len(results) >= max_results:
+                break
+        return results
+    except Exception:
+        return []
+
+
+# ============================================================================
+# Per-vertical industry directories — high-quality, niche-specific lists
+# ============================================================================
+INDUSTRY_DIRECTORIES = {
+    'Duo Equine': [
+        'https://www.equinenow.com/horsefarms.htm',
+        'https://www.usef.org/find-recognized-competitions',
+        'https://www.aqha.com/aqha-find-horse-show',
+        'https://www.usdf.org/about/about-the-sport/where-to-ride.asp',
+    ],
+    'Pets': [
+        'https://www.aaha.org/aaha-accreditation/find-an-aaha-hospital/',
+        'https://www.petsithq.com/directory',
+        'https://www.ibpsa.com/find-a-pet-care-business',
+        'https://www.petfinder.com/animal-shelters-and-rescues/search/',
+    ],
+    'SpillMaster': [
+        'https://www.issa.com/find-a-member',
+        'https://www.iicrc.org/locator/showmap.php',
+        'https://www.restorationindustry.org/page/MemberDirectory',
+        'https://www.crcl-online.com/cleaning-companies-directory',
+    ],
+    'AMR': [
+        'https://www.nada.org/dealer-search',
+        'https://www.rvda.org/find-a-rv-dealer',
+        'https://www.nmma.org/marina-finder',
+        'https://www.gomarinas.com',
+    ],
+    'HouseHold': [
+        'https://www.armaclean.org/find-a-cleaning-company',
+        'https://homecouncil.org/find-a-cleaner',
+        'https://www.iicrc.org/locator/showmap.php',
+    ],
+    'Inversion Misting': [
+        'https://www.uspoultry.org/membership/find-a-member',
+        'https://www.nationaldairy.org/find-a-dairy',
+        'https://www.pork.org/farms-near-me',
+        'https://www.beefusa.org/find-a-cattle-rancher',
+    ],
+}
+
+
+def discover_via_industry_directories(product_fit, max_results=30):
+    """Scrape niche industry directories specific to a product line.
+    Returns business website URLs found on association/regulator pages."""
+    if not product_fit or product_fit not in INDUSTRY_DIRECTORIES:
+        return []
+    results = []
+    seen_domains = set()
+    for directory_url in INDUSTRY_DIRECTORIES[product_fit]:
+        try:
+            r = requests.get(directory_url,
+                              headers={"User-Agent": USER_AGENT},
+                              timeout=REQUEST_TIMEOUT)
+            if r.status_code != 200:
+                continue
+            # Generic external-link extraction
+            for u in re.findall(r'href="(https?://[^"]+)"', r.text):
+                if _should_skip(u):
+                    continue
+                d = _domain_of(u)
+                if not d or d in seen_domains:
+                    continue
+                # Skip the directory site itself
+                if d in directory_url:
+                    continue
+                seen_domains.add(d)
+                results.append({'url': u, 'title': d,
+                                'snippet': f'{product_fit} industry directory'})
+                if len(results) >= max_results:
+                    return results
+            time.sleep(0.5)
+        except Exception:
+            continue
+    return results
+
+
 def scrape_equine_directory(directory_url):
     """Scrape an equine industry directory for member businesses."""
     try:
@@ -1005,6 +1247,66 @@ def _generate_query_variations(business_type, location):
         f"{business_type}{location_part} private",
     ]
     return queries
+
+
+def _guess_product_from_type(business_type):
+    """Map a hunt-category business_type string to its product line."""
+    if not business_type:
+        return None
+    t = business_type.lower()
+    EQUINE = ['horse', 'equestrian', 'equine', 'stable', 'thoroughbred', 'standardbred',
+              'polo', 'rodeo', 'dressage', 'trail riding', 'pony', 'tack', 'feed store',
+              'mule', 'donkey', 'racing', 'racetrack', 'breeder', 'hunter jumper',
+              'foxhunting', 'carriage', 'mounted police']
+    PETS = ['kennel', 'doggy daycare', 'dog boarding', 'cat boarding', 'pet hotel',
+             'animal shelter', 'humane society', 'rescue', 'veterinary', 'vet ',
+             'grooming', 'pet store', 'dog park', 'pet daycare', 'spay neuter',
+             'animal control', 'guide dog', 'k9', 'aquarium store', 'reptile']
+    SPILL = ['waste management', 'industrial cleanup', 'hazmat', 'environmental',
+              'biohazard', 'crime scene', 'food processing', 'meat processing',
+              'dairy processing', 'brewery', 'winery', 'distillery', 'commercial kitchen',
+              'catering', 'hospital', 'nursing home', 'assisted living', 'urgent care',
+              'manufacturing', 'chemical', 'recycling', 'composting', 'water treatment',
+              'sewage', 'landfill', 'public transit', 'correctional', 'jail',
+              'pharmaceutical', 'biotech', 'laboratory', 'medical', 'school district',
+              'university food', 'mortuary', 'funeral', 'crematorium', 'casino',
+              'convention', 'stadium', 'hotel chain', 'food storage', 'cold storage']
+    AMR = ['rv ', ' rv', 'marina', 'yacht', 'boat', 'car dealer', 'auto detail',
+           'car wash', 'rideshare', 'limo', 'taxi', 'bus transit', 'school bus',
+           'truck stop', 'trucking', 'delivery fleet', 'moving company', 'rental car',
+           'powersports', 'motorcycle', 'aviation', 'jet operator', 'fbo',
+           'truck dealer', 'used car', 'auto body', 'restoration shop', 'tow truck',
+           'food truck', 'parking', 'amazon delivery', 'campground']
+    HOUSEHOLD = ['property management', 'airbnb cleaning', 'vacation rental',
+                  'apartment complex', 'condo', 'senior living', 'house cleaning',
+                  'maid service', 'janitorial', 'commercial cleaning', 'mold remediation',
+                  'water damage restoration', 'fire damage', 'odor remediation',
+                  'pet odor', 'pest control', 'carpet cleaning', 'duct cleaning',
+                  'crawl space', 'window cleaning', 'pressure washing', 'real estate',
+                  'home inspector', 'hoa', 'student housing', 'group home']
+    INVERSION = ['warehouse distribution', 'cold storage', 'food storage warehouse',
+                  'large manufacturing', 'agricultural processing', 'meat locker',
+                  'rendering plant', 'pet food manufacturer', 'animal feed manufacturer',
+                  'grain elevator', 'silo', 'ethanol', 'biodiesel', 'composting site',
+                  'agricultural fairground', 'livestock auction', 'poultry farm',
+                  'broiler farm', 'layer hen', 'turkey farm', 'duck farm',
+                  'dairy farm', 'goat dairy', 'sheep farm', 'swine', 'hog farm',
+                  'feedlot', 'cattle ranch', 'beef cattle', 'aquaculture', 'fish farm',
+                  'commercial greenhouse', 'commercial nursery', 'cannabis cultivation',
+                  'large indoor equestrian', 'dairy parlor']
+    if any(k in t for k in INVERSION):
+        return 'Inversion Misting'
+    if any(k in t for k in AMR):
+        return 'AMR'
+    if any(k in t for k in PETS):
+        return 'Pets'
+    if any(k in t for k in SPILL):
+        return 'SpillMaster'
+    if any(k in t for k in HOUSEHOLD):
+        return 'HouseHold'
+    if any(k in t for k in EQUINE):
+        return 'Duo Equine'
+    return None
 
 
 def discover_horse_businesses(business_type, location=None, max_results=20, on_progress=None):
@@ -1185,6 +1487,78 @@ def discover_horse_businesses(business_type, location=None, max_results=20, on_p
         if on_progress:
             on_progress("YellowPages", f"failed: {str(e)[:50]}")
     time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3b: Manta business directory =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("Manta", f"scraping {business_type}")
+        try:
+            for r in scrape_manta(business_type, location, max_results=30):
+                add_candidate(r, "Manta")
+            if on_progress:
+                on_progress("Manta", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("Manta", f"failed: {str(e)[:40]}")
+        time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3c: Better Business Bureau =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("BBB", f"scraping BBB-listed {business_type}")
+        try:
+            for r in scrape_bbb(business_type, location, max_results=20):
+                add_candidate(r, "BBB")
+            if on_progress:
+                on_progress("BBB", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("BBB", f"failed: {str(e)[:40]}")
+        time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3d: SuperPages =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("SuperPages", f"scraping {business_type}")
+        try:
+            for r in scrape_superpages(business_type, location, max_results=30):
+                add_candidate(r, "SuperPages")
+            if on_progress:
+                on_progress("SuperPages", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("SuperPages", f"failed: {str(e)[:40]}")
+        time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3e: MerchantCircle =====
+    if len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("MerchantCircle", f"scraping {business_type}")
+        try:
+            for r in scrape_merchantcircle(business_type, location, max_results=30):
+                add_candidate(r, "MerchantCircle")
+            if on_progress:
+                on_progress("MerchantCircle", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("MerchantCircle", f"failed: {str(e)[:40]}")
+        time.sleep(POLITE_DELAY)
+
+    # ===== SOURCE 3f: Vertical-aware industry directories =====
+    # Map business_type → product fit, then pull from the right industry pack
+    product_for_type = _guess_product_from_type(business_type)
+    if product_for_type and len(all_candidates) < max_results * 2:
+        if on_progress:
+            on_progress("Industry directories",
+                         f"scraping {product_for_type} associations & regulators")
+        try:
+            for r in discover_via_industry_directories(product_for_type, max_results=40):
+                add_candidate(r, f"{product_for_type} industry directory")
+            if on_progress:
+                on_progress("Industry directories", f"total now: {len(all_candidates)}")
+        except Exception as e:
+            if on_progress:
+                on_progress("Industry directories", f"failed: {str(e)[:40]}")
 
     # ===== SOURCE 4: Equine industry directories =====
     for directory_url in EQUINE_DIRECTORIES:
