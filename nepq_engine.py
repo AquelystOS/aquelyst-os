@@ -465,6 +465,11 @@ def _openai_compat_chat(messages, provider_id, max_tokens=1024, temperature=0.7)
                 timeout=45,
             )
             if r.status_code == 200:
+                try:
+                    import database
+                    database.provider_log_ok(provider_id, model)
+                except Exception:
+                    pass
                 return r.json()['choices'][0]['message']['content'], None
             last_err = f"{provider_id} {r.status_code} on {model}: {r.text[:120]}"
             if r.status_code in (429, 503, 404, 400):
@@ -476,6 +481,11 @@ def _openai_compat_chat(messages, provider_id, max_tokens=1024, temperature=0.7)
         except Exception as e:
             last_err = f"{provider_id} error on {model}: {str(e)[:80]}"
             continue
+    try:
+        import database
+        database.provider_log_err(provider_id, last_err)
+    except Exception:
+        pass
     return None, last_err
 
 
@@ -564,21 +574,55 @@ def chat(messages, prefer='auto', extra_context=''):
 
     last_err = ""
     if prefer == 'auto':
-        # Free tier first, paid last. Each provider tries its own model rotation.
-        # Cerebras has its own pool rotation; the others use _openai_compat_chat.
+        # Load-balance across all connected providers using Least-Recently-Used.
+        # Free-tier providers always come before paid (so we don't burn $ when free works),
+        # but WITHIN each tier, the LRU provider goes first. This naturally distributes
+        # load across all 4 free providers if you've connected them all.
+        FREE_TIER = ['cerebras', 'groq', 'together', 'mistral', 'cohere']
+        PAID_TIER = ['claude', 'deepseek', 'openrouter', 'openai']
+
+        # What providers are actually connected right now?
+        free_connected = [p for p in FREE_TIER if api_keys.has_key(p)]
+        paid_connected = [p for p in PAID_TIER if api_keys.has_key(p)]
+
+        # Pull last_used_at from DB to sort LRU-first
+        try:
+            import database
+            log_rows = {row['provider']: row for row in database.provider_log_all()}
+        except Exception:
+            log_rows = {}
+
+        def lru_key(pid):
+            row = log_rows.get(pid, {}) or {}
+            # Providers never used → '' sorts before any timestamp → tried first
+            return row.get('last_used_at') or ''
+
+        free_connected.sort(key=lru_key)
+        paid_connected.sort(key=lru_key)
+
+        # Mark the chosen starter so it gets pushed to back of next rotation
+        # (we mark it BEFORE the call so even if it fails it rotates)
+        if free_connected:
+            try:
+                import database
+                database.provider_log_pick(free_connected[0])
+            except Exception:
+                pass
+
         attempts = []
-        if api_keys.has_key('cerebras'):
-            cerebras_msgs = [{"role": "system", "content": system}] + messages
-            attempts.append(('cerebras', lambda: _cerebras_chat(cerebras_msgs)))
-        for pid in ('groq', 'together', 'mistral', 'cohere'):
-            if api_keys.has_key(pid):
+        # Cerebras gets the special key-pool rotation logic
+        for pid in free_connected:
+            if pid == 'cerebras':
+                _msgs = [{"role": "system", "content": system}] + messages
+                attempts.append(('cerebras', lambda m=_msgs: _cerebras_chat(m)))
+            else:
                 _msgs = [{"role": "system", "content": system}] + messages
                 attempts.append((pid, lambda p=pid, m=_msgs: _openai_compat_chat(m, p)))
-        # Premium tier
-        if api_keys.has_key('claude'):
-            attempts.append(('claude', lambda: _claude_chat(messages, system_prompt=system)))
-        for pid in ('deepseek', 'openrouter', 'openai'):
-            if api_keys.has_key(pid):
+        # Then paid tier as backup, also LRU-ordered
+        for pid in paid_connected:
+            if pid == 'claude':
+                attempts.append(('claude', lambda: _claude_chat(messages, system_prompt=system)))
+            else:
                 _msgs = [{"role": "system", "content": system}] + messages
                 attempts.append((pid, lambda p=pid, m=_msgs: _openai_compat_chat(m, p)))
 

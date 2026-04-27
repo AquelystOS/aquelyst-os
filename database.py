@@ -174,16 +174,27 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
-    # Connection-test history per baseline provider — tracks when each was last
-    # successfully called so the Admin UI can show "connected" status accurately.
+    # Connection-test history + request counters per baseline provider.
+    # Used both for showing "connected" status AND for load-balancing across providers.
     c.execute('''CREATE TABLE IF NOT EXISTS provider_connection_log (
         provider TEXT PRIMARY KEY,
         last_ok_at TEXT,
         last_err_at TEXT,
         last_err TEXT,
         last_model TEXT,
+        last_used_at TEXT,
+        total_requests INTEGER DEFAULT 0,
+        ok_requests INTEGER DEFAULT 0,
+        err_requests INTEGER DEFAULT 0,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
+    # Best-effort schema upgrade for older databases that don't have the new columns
+    for col in ('last_used_at', 'total_requests', 'ok_requests', 'err_requests'):
+        try:
+            c.execute(f'ALTER TABLE provider_connection_log ADD COLUMN {col} '
+                      f'{"INTEGER DEFAULT 0" if col != "last_used_at" else "TEXT"}')
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     conn.commit()
     conn.close()
@@ -433,13 +444,18 @@ def admin_list():
 def provider_log_ok(provider, model=None):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''INSERT INTO provider_connection_log (provider, last_ok_at, last_model, last_err, last_err_at)
-                 VALUES (?, CURRENT_TIMESTAMP, ?, NULL, NULL)
+    c.execute('''INSERT INTO provider_connection_log
+                   (provider, last_ok_at, last_used_at, last_model, last_err, last_err_at,
+                    total_requests, ok_requests, err_requests)
+                 VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, NULL, NULL, 1, 1, 0)
                  ON CONFLICT(provider) DO UPDATE SET
                    last_ok_at = CURRENT_TIMESTAMP,
+                   last_used_at = CURRENT_TIMESTAMP,
                    last_model = excluded.last_model,
                    last_err = NULL,
                    last_err_at = NULL,
+                   total_requests = COALESCE(total_requests, 0) + 1,
+                   ok_requests = COALESCE(ok_requests, 0) + 1,
                    updated_at = CURRENT_TIMESTAMP''',
               (provider, model))
     conn.commit()
@@ -449,13 +465,33 @@ def provider_log_ok(provider, model=None):
 def provider_log_err(provider, error_text):
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''INSERT INTO provider_connection_log (provider, last_err_at, last_err)
-                 VALUES (?, CURRENT_TIMESTAMP, ?)
+    c.execute('''INSERT INTO provider_connection_log
+                   (provider, last_err_at, last_err, last_used_at,
+                    total_requests, ok_requests, err_requests)
+                 VALUES (?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, 1, 0, 1)
                  ON CONFLICT(provider) DO UPDATE SET
                    last_err_at = CURRENT_TIMESTAMP,
                    last_err = excluded.last_err,
+                   last_used_at = CURRENT_TIMESTAMP,
+                   total_requests = COALESCE(total_requests, 0) + 1,
+                   err_requests = COALESCE(err_requests, 0) + 1,
                    updated_at = CURRENT_TIMESTAMP''',
               (provider, (error_text or '')[:200]))
+    conn.commit()
+    conn.close()
+
+
+def provider_log_pick(provider):
+    """Mark provider as 'just chosen for a request' even before we know the result.
+    Used by the load-balancer to bump its last_used_at so it goes to the back of
+    the rotation queue."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO provider_connection_log (provider, last_used_at)
+                 VALUES (?, CURRENT_TIMESTAMP)
+                 ON CONFLICT(provider) DO UPDATE SET
+                   last_used_at = CURRENT_TIMESTAMP''',
+              (provider,))
     conn.commit()
     conn.close()
 

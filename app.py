@@ -723,6 +723,41 @@ def _admin_keys_section():
     st.caption("Aqua tries providers in order — FREE tier first, PAID tier as backup. "
                 "Adding multiple lets her keep working even if one's throttled.")
 
+    # ── Live load distribution dashboard ────────────────────────────
+    log_rows = database.provider_log_all()
+    used = [(r['provider'], r.get('total_requests') or 0,
+              r.get('ok_requests') or 0, r.get('err_requests') or 0)
+             for r in log_rows if (r.get('total_requests') or 0) > 0]
+    if used:
+        total_all = sum(t for _, t, _, _ in used) or 1
+        st.markdown("**📊 Load distribution (since last reset)**")
+        cols = st.columns(len(used))
+        for col, (pid, total, ok, err) in zip(cols, used):
+            pct = round(100 * total / total_all)
+            success_pct = round(100 * ok / total) if total else 0
+            color = '#16a34a' if success_pct >= 90 else '#f59e0b' if success_pct >= 60 else '#dc2626'
+            col.markdown(
+                f"<div style='background:rgba(255,255,255,0.7);"
+                f"border:1px solid rgba(15,23,42,0.08);border-radius:10px;"
+                f"padding:0.6rem 0.8rem;text-align:center'>"
+                f"<div style='font-size:0.72rem;color:#64748b;text-transform:uppercase;"
+                f"letter-spacing:0.06em;font-weight:700'>{pid}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+                f"font-weight:700;color:#0a0f1c;margin-top:0.2rem'>{total}</div>"
+                f"<div style='font-size:0.7rem;color:#94a3b8'>{pct}% of load</div>"
+                f"<div style='font-size:0.7rem;color:{color};font-weight:600'>"
+                f"{success_pct}% ok</div>"
+                f"</div>", unsafe_allow_html=True
+            )
+        if st.button("Reset counters", key="reset_load_counters"):
+            conn = database.get_connection()
+            conn.execute('UPDATE provider_connection_log SET total_requests = 0, '
+                          'ok_requests = 0, err_requests = 0')
+            conn.commit()
+            conn.close()
+            st.rerun()
+        st.markdown("")
+
     # ── Health Check All ───────────────────────────────────────────
     hc_col1, hc_col2 = st.columns([3, 1])
     hc_col1.markdown(
