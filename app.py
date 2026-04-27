@@ -26,6 +26,8 @@ import auto_engagement
 import email_responder
 import audit_log
 
+autopilot.reset_stale_state()
+
 
 st.set_page_config(
     page_title="AqueLyst Hunter",
@@ -1339,7 +1341,7 @@ def _home_autopilot_widget():
                     'business_types': ['horse boarding facility', 'equestrian center',
                                        'horse stable', 'horse rescue'],
                     'target_leads': 25,
-                    'min_score': 40,
+                    'min_score': 85,
                     'auto_draft_outreach': True,
                 }
                 autopilot.clear_log()
@@ -1801,7 +1803,7 @@ def _render_autopilot_idle(state):
                                   help="Autopilot stops once this many leads pass the score threshold and land in your CRM.")
         min_score = st.slider(
             "Minimum AI quality score",
-            10, 90, 40, 5,
+            10, 95, 85, 5,
             help="Higher = pickier. Leads scoring below this are skipped (not added to CRM)."
         )
 
@@ -1841,7 +1843,7 @@ def _render_autopilot_idle(state):
         with st.form("add_category", clear_on_submit=True):
             c1, c2, c3 = st.columns([2, 1, 1])
             new_type = c1.text_input("Business type", placeholder="e.g. dog daycare, marina, country club")
-            new_product = c2.selectbox("For product", ['', 'Duo Equine', 'Pets', 'SpillMaster', 'AMR', 'HouseHold'])
+            new_product = c2.selectbox("For product", ['', 'Duo Equine', 'Pets', 'SpillMaster', 'AMR', 'HouseHold', 'Inversion Misting'])
             new_priority = c3.selectbox("Priority", [1, 2, 3, 4], index=2,
                                          help="1 = best fit, 4 = lowest")
             if st.form_submit_button("➕ Add category", type="primary", use_container_width=True):

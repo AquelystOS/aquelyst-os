@@ -490,3 +490,19 @@ def stop_autopilot():
 
 def is_running():
     return get_state().get('running', False)
+
+
+_HAS_RESET_STALE = False
+
+def reset_stale_state():
+    """On fresh container boot, the state file may say running=true even though
+    no thread is alive (previous container died, threads don't survive). Force-clear
+    it once per process so the UI doesn't show a phantom running autopilot."""
+    global _HAS_RESET_STALE
+    if _HAS_RESET_STALE:
+        return
+    _HAS_RESET_STALE = True
+    state = get_state()
+    if state.get('running'):
+        update_state(running=False, current_action='idle',
+                     stopped_at=datetime.now().isoformat())
