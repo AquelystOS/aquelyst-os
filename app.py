@@ -2025,20 +2025,43 @@ def _render_autopilot_idle(state):
                     else:
                         st.warning(f"{new_type} already in list")
 
-        # Show + edit existing
-        for i, cat in enumerate(all_categories):
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
-            with c1:
-                st.markdown(f"**{cat['type']}**")
-                st.caption(f"For: {cat.get('product', 'any')}")
-            c2.caption(f"Priority {cat.get('priority', 3)}")
-            new_active = c3.checkbox("Active", value=cat.get('active', True), key=f"cat_active_{i}")
-            if new_active != cat.get('active'):
-                hunt_categories.update_category(i, active=new_active)
-                st.rerun()
-            if c4.button("🗑️", key=f"cat_del_{i}"):
-                hunt_categories.delete_category(i)
-                st.rerun()
+        # Reset-to-defaults safety net
+        rc1, rc2 = st.columns([5, 1])
+        rc1.caption("Reset reloads the latest built-in defaults (loses your custom additions).")
+        if rc2.button("↻ Reset", key="reset_categories",
+                      help="Reload the latest default categories"):
+            hunt_categories.reset()
+            st.success("Reloaded default categories")
+            st.rerun()
+
+        # Group editor by product line for navigability
+        product_order = ['Duo Equine', 'Pets', 'SpillMaster', 'AMR', 'HouseHold',
+                         'Inversion Misting']
+        cats_by_product = {p: [] for p in product_order}
+        cats_by_product['Other'] = []
+        for orig_idx, cat in enumerate(all_categories):
+            prod = cat.get('product') or 'Other'
+            cats_by_product.setdefault(prod, []).append((orig_idx, cat))
+
+        for prod in product_order + (['Other'] if cats_by_product.get('Other') else []):
+            items = cats_by_product.get(prod, [])
+            if not items:
+                continue
+            active_count = sum(1 for _, c in items if c.get('active'))
+            with st.expander(f"**{prod}** — {len(items)} types ({active_count} active)",
+                              expanded=(prod == 'Duo Equine')):
+                for orig_idx, cat in items:
+                    c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
+                    c1.markdown(f"**{cat['type']}**")
+                    c2.caption(f"Priority {cat.get('priority', 3)}")
+                    new_active = c3.checkbox("Active", value=cat.get('active', False),
+                                              key=f"cat_active_{orig_idx}")
+                    if new_active != cat.get('active', False):
+                        hunt_categories.update_category(orig_idx, active=new_active)
+                        st.rerun()
+                    if c4.button("🗑️", key=f"cat_del_{orig_idx}"):
+                        hunt_categories.delete_category(orig_idx)
+                        st.rerun()
 
     auto_draft = st.checkbox(
         "✍️ Auto-write a personalized cold email for each lead (recommended)",
