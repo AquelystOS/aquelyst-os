@@ -181,7 +181,10 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
     try:
         r = requests.post(
             f"{CEREBRAS_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
             json={
                 "model": model,
                 "messages": messages,
@@ -378,28 +381,63 @@ def _build_crm_snapshot():
 
 
 def _template_fallback(messages):
-    """Smart fallback when AI is unavailable. Context-aware based on the conversation."""
-    # Look at the last user message to detect if this is for a teammate or prospect
+    """Smart fallback when AI is unavailable. Context-aware based on the conversation.
+
+    Two contexts:
+    - Email draft (cold email, reply-to-inbound, etc.) — sign as the LOGGED-IN HUMAN.
+    - Live team chat with Aqua — sign as AQUA, address the human by name, stay in character.
+    """
     last_msg = ''
-    is_teammate = False
     for m in messages:
         if m.get('role') == 'user':
             last_msg = m.get('content', '')
-    lower = last_msg.lower()
-    if any(k in lower for k in ['teammate', 'team member', 'peer mode', 'co-founder', 'internal note']):
-        is_teammate = True
+    lower = last_msg.lower().strip()
 
-    # Try to use the logged-in user's name for sign-off
+    is_teammate_email = any(k in lower for k in [
+        'teammate', 'team member', 'peer mode', 'co-founder', 'internal note',
+        'roleplay', 'roleplaying as a prospect',
+    ])
+
+    # Detect "live chat with Aqua" mode by looking for the qa-mode marker
+    # or short conversational utterances rather than full email/draft requests.
+    is_chat = (
+        len(last_msg) < 240 and
+        not any(k in lower for k in ['subject:', 'cold email', 'write an email',
+                                       'reply to', 'draft a', 'compose'])
+    )
+
     try:
         current = team.get_current_user()
-        sign = current['name'].split()[0] if current.get('name') else ''
+        their_first = current['name'].split()[0] if current.get('name') else ''
+        their_role = current.get('short_role') or current.get('role') or ''
     except Exception:
-        sign = ''
+        their_first = ''
+        their_role = ''
 
-    if is_teammate:
-        return f"Got it — thanks for sending this over. I'll process and follow up if I have specific questions.\n\n— {sign or 'Aqua'}"
+    if is_chat:
+        # Live conversation with Aqua. Be Aqua. Acknowledge the human. Don't auto-reply.
+        greeting = f"Hey {their_first}" if their_first else "Hey"
+        if not lower or lower in ('hi', 'hello', 'hey', 'yo', 'sup'):
+            return (
+                f"{greeting} — Aqua here. Aqua is the AqueLyst team's AI sales coach. "
+                f"What do you want to dig into? I can brainstorm new lead angles, "
+                f"roleplay an objection, review a draft, or just talk shop about a deal "
+                f"that's stuck. (FYI: my AI brain is offline right now so I'm running on a "
+                f"limited fallback — your real answer will be way better once Cerebras "
+                f"reconnects.)"
+            )
+        return (
+            f"{greeting} — got your message. My AI brain is offline at the moment so I "
+            f"can't give a thoughtful reply yet. Try again in a few seconds, or check "
+            f"Setup → API Keys to confirm Cerebras / Claude is connected.\n\n— Aqua"
+        )
 
-    return (f"Got your note. Let me think on this and circle back with a more thoughtful reply.\n\n— {sign or 'Joseph'}")
+    if is_teammate_email:
+        return (f"Got it — thanks for sending this over. I'll process and follow up if I "
+                f"have specific questions.\n\n— {their_first or 'Aqua'}")
+
+    return (f"Got your note. Let me think on this and circle back with a more thoughtful "
+            f"reply.\n\n— {their_first or 'Joseph'}")
 
 
 # ============================================================================
