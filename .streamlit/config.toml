@@ -1,11 +1,13 @@
 [theme]
-# Dark dashboard surface, matching the Today hero. Cards stay white so they
-# pop cleanly against the dark page bg. primaryColor drives Streamlit's
-# default accents — keep aligned with --accent in app.py.
+# AqueLyst brand cyan as Streamlit's primary accent. We tell Streamlit it's
+# a LIGHT theme (white bg, dark text) so widgets inside our white cards
+# render with dark legible text — then override the visible page background
+# to dark via custom CSS in app.py (.stApp gradient). Best of both worlds:
+# dark dashboard surface + readable white-card widgets.
 primaryColor = "#06b6d4"
-backgroundColor = "#0f172a"
-secondaryBackgroundColor = "#1e293b"
-textColor = "#e2e8f0"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9fa"
+textColor = "#262730"
 font = "sans serif"
 
 [server]

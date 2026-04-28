@@ -279,16 +279,41 @@ st.markdown("""
         pointer-events: none;
         z-index: 0;
     }
-    /* Streamlit captions and bare text on the page bg need to be light */
-    .stApp [data-testid="stCaptionContainer"] {
-        color: var(--ink-on-bg) !important;
-        opacity: 0.75;
+    /* Inside white card components (expander, form, metric, container) keep
+       text DARK so it's readable on the white surface. Heroes, glass panels,
+       and ring cards use inline color styles to stay light on dark — those
+       win over these defaults. This is the fix for the hunt-categories
+       white-on-white bug introduced when we flipped to a dark theme. */
+    [data-testid="stExpander"],
+    [data-testid="stForm"],
+    [data-testid="stMetric"] {
+        color: var(--ink);
     }
-    /* Markdown headings rendered directly on the page bg (outside cards) — light */
-    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h3,
-    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h4,
-    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h5 {
-        color: var(--ink-on-bg) !important;
+    [data-testid="stExpander"] [data-testid="stCaptionContainer"],
+    [data-testid="stForm"] [data-testid="stCaptionContainer"],
+    [data-testid="stMetric"] [data-testid="stCaptionContainer"] {
+        color: var(--ink-soft) !important;
+        opacity: 1;
+    }
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"],
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"],
+    [data-testid="stMetric"] [data-testid="stMarkdownContainer"] {
+        color: var(--ink);
+    }
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] h5 {
+        color: var(--ink) !important;
+    }
+    /* Form labels (text_input / selectbox / checkbox / radio) inside white
+       cards — keep them dark for legibility. */
+    [data-testid="stExpander"] label,
+    [data-testid="stForm"] label,
+    [data-testid="stMetric"] label {
+        color: var(--ink-soft) !important;
     }
 
     .main {padding-top: 0.5rem;}
