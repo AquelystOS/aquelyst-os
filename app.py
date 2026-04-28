@@ -1472,28 +1472,60 @@ def show_bid_opportunities():
     cols[2].metric("🔥 Hot (score ≥ 60)", stats['hot'])
     cols[3].metric("Products covered", len(stats['by_product']))
 
-    # Refresh button
-    rc1, rc2, rc3 = st.columns([2, 2, 2])
-    days_back = rc1.selectbox("Look back", [7, 14, 30, 60, 90], index=2,
-                                key="bid_days_back")
-    min_score = rc2.slider("Minimum match score", 10, 80, 25, 5,
-                            key="bid_min_score")
-    if rc3.button("🔄 Refresh from SAM.gov", type="primary",
-                   use_container_width=True, key="refresh_bids"):
-        progress_msgs = []
-        with st.spinner("Querying SAM.gov..."):
-            opps, err = bid_intelligence.discover_bid_opportunities(
-                api_key=api_key, max_results=200, days=days_back,
-                min_score=min_score,
-                on_progress=lambda m: progress_msgs.append(m),
-            )
-        for m in progress_msgs:
-            st.caption(m)
-        if err:
-            st.error(f"❌ {err}")
-        else:
-            added = sum(database.save_bid_opportunity(o) for o in opps)
-            st.success(f"✅ Found {len(opps)} matching opportunities — {added} new, {len(opps) - added} already saved.")
+    # Search controls
+    with st.container(border=True):
+        st.markdown("##### 🔍 Pull bids from SAM.gov")
+        rc1, rc2, rc3 = st.columns([2, 2, 2])
+        days_back = rc1.selectbox(
+            "Look back (days)", [7, 14, 30, 60, 90, 180, 365], index=2,
+            key="bid_days_back",
+            help="Larger window = more results but slower."
+        )
+        min_score = rc2.slider(
+            "Min match score to keep", 10, 80, 25, 5,
+            key="bid_min_score",
+            help="Lower = more (noisier) results. 25 is a good starting point."
+        )
+        custom_kw = rc3.text_input(
+            "Custom keyword (optional)",
+            placeholder="e.g. 'horse stable' or 'CAFO'",
+            key="bid_custom_kw",
+            help="Add your own phrase to the search alongside the built-ins."
+        )
+
+        if st.button("🔄 Refresh from SAM.gov", type="primary",
+                      use_container_width=True, key="refresh_bids"):
+            progress_msgs = []
+            with st.spinner("Querying SAM.gov across multiple PSC codes, "
+                              "NAICS codes, and keyword angles… (~30s)"):
+                opps, err = bid_intelligence.discover_bid_opportunities(
+                    api_key=api_key, days=days_back,
+                    min_score=min_score,
+                    custom_keyword=custom_kw.strip() if custom_kw else None,
+                    on_progress=lambda m: progress_msgs.append(m),
+                )
+            with st.expander(f"📋 Query trace ({len(progress_msgs)} steps)",
+                              expanded=False):
+                for m in progress_msgs:
+                    st.caption(m)
+            if err:
+                st.error(f"❌ {err}")
+            else:
+                added = sum(database.save_bid_opportunity(o) for o in opps)
+                if opps:
+                    st.success(
+                        f"✅ Found {len(opps)} scored opportunities — "
+                        f"{added} new, {len(opps) - added} already in your CRM."
+                    )
+                else:
+                    st.warning(
+                        "🟡 SAM.gov returned 0 matches at score ≥ "
+                        f"{min_score}. Try: (1) lower the min match score, "
+                        "(2) widen the look-back to 90 or 180 days, "
+                        "(3) add a custom keyword above. "
+                        "Federal bids matching AqueLyst products are real but "
+                        "fairly niche — typical hit rates are 5-30 per refresh."
+                    )
 
     st.markdown("---")
 
