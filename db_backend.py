@@ -316,45 +316,74 @@ def _reset_pool():
         _pg_pool = None
 
 
-def get_connection():
-    """Return a db connection. SQLite if no DATABASE_URL, Postgres (pooled) otherwise.
+# When Postgres is unreachable, set this so the rest of the app can show a banner
+# and so we don't keep retrying every query. SQLite kicks in as the fallback.
+_pg_unreachable_reason = None
 
-    Retries once on OperationalError — Postgres connections die during deploys,
-    container sleeps, network blips, or when Supabase rotates pooler nodes."""
+
+def get_pg_unreachable_reason():
+    """If Postgres is configured but unreachable, returns the last error string."""
+    return _pg_unreachable_reason
+
+
+def _sqlite_fallback():
+    """Local SQLite — used when Postgres is configured but unreachable."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_connection():
+    """Return a db connection. SQLite if no DATABASE_URL OR if Postgres is
+    unreachable. Postgres (pooled) when configured + reachable.
+
+    Retries on OperationalError — Postgres connections die during Supabase
+    pooler rotations, container sleeps, network blips."""
+    global _pg_unreachable_reason
     db_url = _get_database_url()
     if not db_url:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _sqlite_fallback()
 
+    # If Postgres was unreachable in the last 30s, don't keep hammering it —
+    # use SQLite fallback so the app stays usable
     import time as _time
+    if _pg_unreachable_reason and _pg_unreachable_reason.get('ts'):
+        if _time.time() - _pg_unreachable_reason['ts'] < 30:
+            return _sqlite_fallback()
+
     last_err = None
-    for attempt in range(3):
+    for attempt in range(2):
         pool = _get_pg_pool()
         if pool:
             try:
                 raw = pool.getconn()
-                # If the pooled connection is dead (closed by server), this raises
                 raw.autocommit = True
-                # Smoke-test it cheaply before returning
                 with raw.cursor() as _c:
                     _c.execute("SELECT 1")
+                _pg_unreachable_reason = None  # back online
                 return _PooledPgConnection(raw, pool)
             except Exception as e:
                 last_err = e
-                # Drop and rebuild the pool — the underlying connections are stale
                 _reset_pool()
-                _time.sleep(0.4 * (attempt + 1))
+                _time.sleep(0.5)
                 continue
-        # Pool init itself failed — try a one-off direct connection
+        # Pool init failed — try a direct connection
         try:
-            return _PgConnection(db_url)
+            conn = _PgConnection(db_url)
+            _pg_unreachable_reason = None
+            return conn
         except Exception as e:
             last_err = e
-            _time.sleep(0.4 * (attempt + 1))
+            _time.sleep(0.5)
             continue
 
-    raise last_err or RuntimeError("Could not connect to Postgres after 3 attempts")
+    # Postgres is unreachable. Cache the reason + fall back to SQLite so the
+    # app keeps running. The Admin → Database tab will surface this status.
+    _pg_unreachable_reason = {
+        'ts': _time.time(),
+        'error': str(last_err)[:300],
+    }
+    return _sqlite_fallback()
 
 
 # ---------------------------------------------------------------------------
@@ -376,11 +405,24 @@ OperationalError = (sqlite3.OperationalError,) + _pg_operational
 
 def safe_test_connection():
     """Return (ok: bool, kind: str, detail: str). For Admin → Database tab."""
+    db_url = _get_database_url()
+    fallback_active = bool(_pg_unreachable_reason)
+
     try:
         conn = get_connection()
         c = conn.cursor()
-        kind = backend_kind()
-        if kind == 'postgres':
+        # If Postgres was configured but we got SQLite back → fallback is active
+        if db_url and fallback_active:
+            err = _pg_unreachable_reason.get('error', 'unknown')
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return False, 'postgres-fallback', (
+                f"⚠️ Postgres configured but unreachable — using local SQLite "
+                f"fallback. Error: {err[:200]}"
+            )
+        if db_url:
             c.execute("SELECT version()")
             row = c.fetchone()
             ver = row[0] if row is not None else 'unknown'

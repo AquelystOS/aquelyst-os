@@ -559,6 +559,22 @@ def main():
 
     show_top_nav()
 
+    # Postgres-fallback banner — only shows when Postgres is configured but unreachable
+    try:
+        import db_backend as _dbb
+        unreachable = _dbb.get_pg_unreachable_reason()
+        if unreachable:
+            st.error(
+                "⚠️ **Postgres database is unreachable — running on local SQLite "
+                "fallback.** Data saved during this session will NOT persist across "
+                "redeploys. Most likely cause: Supabase free-tier project paused "
+                "from inactivity (log into supabase.com to wake it up), or password "
+                "rotation needed. Detail: "
+                f"`{unreachable.get('error', '?')[:160]}`"
+            )
+    except Exception:
+        pass
+
     pages = {
         "operations": show_operations,
         "inbox": show_inbox,
