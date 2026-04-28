@@ -106,8 +106,15 @@ def read_log():
 # ============================================================================
 # Engagement logic
 # ============================================================================
-def find_engagement_candidates(min_score):
-    """Find leads ready for initial outreach."""
+def find_engagement_candidates(min_score, cooldown_minutes=10):
+    """Find leads ready for initial outreach.
+
+    Skips leads any user has touched within `cooldown_minutes` so two
+    teammates' Aquas can't blindly double-contact the same prospect.
+    Default 10 min — enough buffer that human-sent + auto-engagement
+    don't pile on the same inbox."""
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
     leads = database.get_all_leads()
     candidates = []
     for l in leads:
@@ -121,8 +128,18 @@ def find_engagement_candidates(min_score):
             continue
         if database.is_suppressed(l['email']):
             continue
+        # Cooldown: skip if anyone touched this lead recently
+        last = l.get('last_contacted')
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(str(last).replace('Z', '+00:00'))
+                if last_dt.tzinfo is not None:
+                    last_dt = last_dt.replace(tzinfo=None)
+                if last_dt > cutoff:
+                    continue  # touched too recently — let it breathe
+            except Exception:
+                pass
         candidates.append(l)
-    # Highest score first
     candidates.sort(key=lambda x: -(x['lead_score'] or 0))
     return candidates
 

@@ -279,8 +279,37 @@ def init_db():
         except Exception:
             pass  # column already exists
 
+    # Per-user attribution columns (added 2026-04-28 — multi-tenancy audit).
+    # Each row gets stamped with the team member who created/sent it so two
+    # users' Aquas can't blindly double-contact the same lead and so admin
+    # views can show "who did what." Idempotent — silently skip if the
+    # column is already there.
+    for table, col in (
+        ('leads',           'last_contacted_by'),
+        ('outreach_drafts', 'created_by'),
+        ('outreach_drafts', 'sent_by'),
+        ('activities',      'created_by'),
+        ('inbound_messages','assigned_to'),
+    ):
+        try:
+            c.execute(f'ALTER TABLE {table} ADD COLUMN {col} TEXT')
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
+
+
+def _current_actor_email():
+    """Return the logged-in user's email for attribution columns. Returns
+    None if no session_state user exists (background threads, dev mode,
+    autopilot without an active user, etc.) — callers should pass an
+    explicit actor in those cases."""
+    try:
+        import streamlit as _st
+        return (_st.session_state.get('logged_in_user_email') or '').lower() or None
+    except Exception:
+        return None
 
 
 def aqua_save_message(user_email, role, content, source=None):
@@ -1225,13 +1254,15 @@ def get_conversation_thread(lead_id):
     return thread
 
 
-def log_activity(lead_id, activity_type, description):
-    """Log an activity for the activity feed."""
+def log_activity(lead_id, activity_type, description, actor=None):
+    """Log an activity for the activity feed. `actor` defaults to the logged-in
+    user's email so the activity feed can show "who did what" per row."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''INSERT INTO activities (lead_id, activity_type, description)
-                 VALUES (?, ?, ?)''',
-              (lead_id, activity_type, description))
+    actor = (actor or _current_actor_email() or '').lower() or None
+    c.execute('''INSERT INTO activities (lead_id, activity_type, description, created_by)
+                 VALUES (?, ?, ?, ?)''',
+              (lead_id, activity_type, description, actor))
     conn.commit()
     conn.close()
 
@@ -1455,7 +1486,7 @@ def update_lead(lead_id, **kwargs):
         'business_name', 'contact_name', 'email', 'phone', 'website', 'social_url',
         'city', 'state', 'business_type', 'lead_source', 'source_channel', 'message',
         'pain_hypothesis', 'product_fit', 'lead_score', 'status', 'last_contacted',
-        'next_follow_up_date', 'notes', 'opt_out'
+        'next_follow_up_date', 'notes', 'opt_out', 'last_contacted_by',
     }
 
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
@@ -1463,6 +1494,13 @@ def update_lead(lead_id, **kwargs):
     if not updates:
         conn.close()
         return False
+
+    # Auto-stamp last_contacted_by whenever last_contacted is updated,
+    # unless the caller explicitly passed last_contacted_by.
+    if 'last_contacted' in updates and 'last_contacted_by' not in updates:
+        actor = _current_actor_email()
+        if actor:
+            updates['last_contacted_by'] = actor
 
     updates['updated_at'] = datetime.now().isoformat()
 
@@ -1585,13 +1623,17 @@ def get_dashboard_stats():
     conn.close()
     return stats
 
-def add_outreach_draft(lead_id, message_type, subject, content):
-    """Add an outreach draft."""
+def add_outreach_draft(lead_id, message_type, subject, content, created_by=None):
+    """Add an outreach draft. `created_by` defaults to the logged-in user so
+    we can show whose draft it is and prevent another user's auto-engagement
+    bot from generating a competing draft for the same lead."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''INSERT INTO outreach_drafts (lead_id, message_type, subject, content)
-                 VALUES (?, ?, ?, ?)''',
-              (lead_id, message_type, subject, content))
+    created_by = (created_by or _current_actor_email() or '').lower() or None
+    c.execute('''INSERT INTO outreach_drafts
+                  (lead_id, message_type, subject, content, created_by)
+                 VALUES (?, ?, ?, ?, ?)''',
+              (lead_id, message_type, subject, content, created_by))
     conn.commit()
     draft_id = c.lastrowid
     conn.close()
@@ -1614,11 +1656,14 @@ def approve_draft(draft_id):
     conn.commit()
     conn.close()
 
-def mark_draft_sent(draft_id):
-    """Mark a draft as sent."""
+def mark_draft_sent(draft_id, sent_by=None):
+    """Mark a draft as sent + record who sent it. `sent_by` defaults to the
+    logged-in user."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('UPDATE outreach_drafts SET sent = 1 WHERE id = ?', (draft_id,))
+    sent_by = (sent_by or _current_actor_email() or '').lower() or None
+    c.execute('UPDATE outreach_drafts SET sent = 1, sent_by = ? WHERE id = ?',
+              (sent_by, draft_id))
     conn.commit()
     conn.close()
 

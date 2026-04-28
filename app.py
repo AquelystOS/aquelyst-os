@@ -1668,6 +1668,14 @@ def _admin_keys_section():
 
 
 def _admin_memory_section():
+    # Cross-user memory is sensitive — restrict to root admin (Joseph) only.
+    # Other admins can manage team / API keys / junk patterns but not peer
+    # at private Aqua memories.
+    if not is_root_admin():
+        st.warning("🔒 Aqua memory is private to each user. Only the root admin "
+                    "can view cross-user memory. You can still manage your own "
+                    "memory by chatting with Aqua directly.")
+        return
     st.markdown("##### What Aqua remembers about each team member")
     import team as _team
     members = _team.load_team()
@@ -1703,6 +1711,14 @@ def _admin_memory_section():
 
 
 def _admin_chatlogs_section():
+    # Chat logs contain personal conversations between each user and Aqua —
+    # restrict cross-user viewing to the root admin (Joseph) only. Other
+    # admins shouldn't be reading their teammates' private chats.
+    if not is_root_admin():
+        st.warning("🔒 Chat logs are private to each user. Only the root admin "
+                    "can view other team members' chats. Your own chat history "
+                    "is always available in Sales Bot → Chat.")
+        return
     st.markdown("##### Chat history per team member")
     import team as _team
     members = _team.load_team()
