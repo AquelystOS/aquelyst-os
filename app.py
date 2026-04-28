@@ -550,8 +550,72 @@ def main():
         "audit": show_audit_log,
         "setup": show_setup,
         "admin": show_admin_console,
+        "search": show_search_results,
     }
     pages.get(st.session_state.page, show_operations)()
+
+
+def show_search_results():
+    """Global search across leads, inbound messages, and drafts."""
+    q = st.session_state.get('search_query', '').strip()
+    st.markdown(f"## 🔍 Search results for: `{q}`" if q else "## 🔍 Search")
+
+    if not q:
+        st.caption("Type a search query in the top bar.")
+        return
+
+    results = database.global_search(q, limit_per_kind=25)
+    n_leads = len(results['leads'])
+    n_inbound = len(results['inbound'])
+    n_drafts = len(results['drafts'])
+    total = n_leads + n_inbound + n_drafts
+
+    if total == 0:
+        st.info(f"No matches for **{q}** across leads, inbox, or drafts.")
+        return
+
+    st.caption(f"{total} matches · {n_leads} leads · {n_inbound} messages · {n_drafts} drafts")
+    st.markdown("---")
+
+    if results['leads']:
+        st.markdown(f"### 👥 Leads ({n_leads})")
+        for lead in results['leads']:
+            c1, c2, c3 = st.columns([3, 2, 1])
+            c1.markdown(f"**{lead['business_name']}** — {lead.get('contact_name') or '—'}")
+            c2.caption(
+                f"{lead.get('business_type') or '?'} · "
+                f"{lead.get('city') or ''} {lead.get('state') or ''} · "
+                f"score {lead.get('lead_score') or 0}"
+            )
+            if c3.button("Open →", key=f"sr_lead_{lead['id']}", use_container_width=True):
+                st.session_state.viewing_lead_id = lead['id']
+                st.session_state.page = "customer_detail"
+                st.rerun()
+
+    if results['inbound']:
+        st.markdown(f"### 📨 Inbox messages ({n_inbound})")
+        for m in results['inbound']:
+            sender = m.get('business_name') or m.get('from_name') or m['from_email']
+            with st.container(border=True):
+                c1, c2 = st.columns([6, 1])
+                c1.markdown(f"**{sender}** · _{(m.get('subject') or '(no subject)')[:80]}_")
+                c1.caption((m.get('body') or '')[:200].replace('\n', ' '))
+                if c2.button("Open lead", key=f"sr_inb_{m['id']}",
+                              use_container_width=True):
+                    if m['lead_id']:
+                        st.session_state.viewing_lead_id = m['lead_id']
+                        st.session_state.page = "customer_detail"
+                        st.rerun()
+
+    if results['drafts']:
+        st.markdown(f"### 📝 Drafts ({n_drafts})")
+        for d in results['drafts']:
+            sender = d.get('business_name') or '(unknown lead)'
+            sent_label = "✓ sent" if d.get('sent') else "○ pending"
+            st.markdown(
+                f"**{sender}** · _{(d.get('subject') or '(no subject)')[:80]}_ · {sent_label}"
+            )
+            st.caption((d.get('content') or '')[:200].replace('\n', ' '))
 
 
 # ============================================================================
@@ -1261,7 +1325,7 @@ def show_top_nav():
     role_html = (f"<span style='opacity:0.85;font-weight:400'> · {user_role}</span>"
                  if user_role else "")
 
-    top_left, top_right = st.columns([5, 1])
+    top_left, top_search, top_right = st.columns([3, 3, 1])
     top_left.html(
         "<div style='display:flex;align-items:center;gap:0.6rem;padding:0.3rem 0'>"
         "<div style='font-size:0.85rem;color:#64748b'>🐴 <b>AqueLyst OS</b></div>"
@@ -1270,6 +1334,16 @@ def show_top_nav():
         f"{user_name}{role_html}"
         f"</span></div>"
     )
+    with top_search:
+        sq = st.text_input(
+            "Global search", value=st.session_state.get('search_query', ''),
+            placeholder="🔍 Search leads, inbox, drafts…",
+            label_visibility="collapsed", key="search_input"
+        )
+        if sq and sq.strip() and sq.strip() != st.session_state.get('search_query', ''):
+            st.session_state.search_query = sq.strip()
+            st.session_state.page = "search"
+            st.rerun()
     if top_right.button("🚪 Sign out", key="signout_btn", use_container_width=True):
         st.session_state.pop('logged_in_user_email', None)
         st.session_state.pop('team_password_ok', None)
@@ -3642,11 +3716,50 @@ def _show_split_received_replies():
             external_msgs.append(m)
 
     # ===== EXTERNAL REPLIES (top — most important) =====
-    st.markdown(f"### 📨 From customers & prospects ({len(external_msgs)})")
-    if not external_msgs:
-        st.caption("_No external replies yet_")
+    # Filters
+    f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
+    intent_filter = f1.selectbox(
+        "Intent", ["All", "interested", "ready_to_buy", "pricing_request",
+                    "question", "objection", "not_interested", "unsubscribe",
+                    "auto_reply", "other"],
+        key="inbox_intent_filter")
+    sentiment_filter = f2.selectbox(
+        "Sentiment", ["All", "positive", "neutral", "negative", "hostile"],
+        key="inbox_sentiment_filter")
+    age_filter = f3.selectbox(
+        "Age", ["All", "Last 24h", "Last 7d", "Last 30d"],
+        key="inbox_age_filter")
+    f4.write("")  # spacer
+
+    # Apply filters
+    from datetime import datetime as _dt, timedelta as _td
+    filtered = list(external_msgs)
+    if intent_filter != "All":
+        filtered = [m for m in filtered if (m['intent'] or '') == intent_filter]
+    if sentiment_filter != "All":
+        filtered = [m for m in filtered if (m['sentiment'] or 'neutral') == sentiment_filter]
+    if age_filter != "All":
+        cutoff = _dt.now() - {
+            "Last 24h": _td(hours=24),
+            "Last 7d": _td(days=7),
+            "Last 30d": _td(days=30),
+        }[age_filter]
+        def _msg_dt(m):
+            try:
+                return _dt.fromisoformat((m['received_at'] or '').replace('Z', ''))
+            except Exception:
+                return _dt.min
+        filtered = [m for m in filtered if _msg_dt(m) >= cutoff]
+
+    label_suffix = ""
+    if len(filtered) != len(external_msgs):
+        label_suffix = f" — showing {len(filtered)} of {len(external_msgs)}"
+
+    st.markdown(f"### 📨 From customers & prospects ({len(external_msgs)}){label_suffix}")
+    if not filtered:
+        st.caption(f"_No matches with these filters._")
     else:
-        for m in external_msgs[:30]:
+        for m in filtered[:30]:
             _render_inbound_card(m, is_team=False)
 
     # Dismissed messages (junk) — undo if needed
@@ -4473,28 +4586,32 @@ def show_customer_detail():
         st.markdown(f"**Match score:** {score}/100 — {lead_scoring.get_lead_score_explanation(score)}")
         st.markdown(f"**Best product fit:** {lead['product_fit'] or '_Not determined_'}")
 
-    # ===== CONVERSATION THREAD (the new headline view) =====
+    # ===== TABS — clean navigation instead of stacked expanders =====
     thread = database.get_conversation_thread(lead_id)
     thread_count = len(thread)
-    with st.expander(f"💬 Conversation thread ({thread_count} message{'s' if thread_count != 1 else ''})",
-                       expanded=(thread_count > 0)):
+    history = [a for a in database.get_recent_activities(50) if a['lead_id'] == lead_id]
+
+    cd_tab_conv, cd_tab_act, cd_tab_status, cd_tab_actions = st.tabs([
+        f"💬 Conversation ({thread_count})",
+        f"📜 Activity ({len(history)})",
+        "✏️ Status",
+        "⚙️ Actions",
+    ])
+
+    with cd_tab_conv:
         if not thread:
             st.caption("No emails exchanged yet. When you send or receive a message, it'll show here.")
         else:
             _render_conversation_thread(thread, lead, key_ns=f"detail_{lead_id}")
 
-    # History (activities log)
-    with st.expander("📜 Activity log"):
-        history = database.get_recent_activities(50)
-        history = [a for a in history if a['lead_id'] == lead_id]
+    with cd_tab_act:
         if history:
             for a in history[:20]:
                 st.markdown(f"- {a['description']} — *{format_date_friendly(a['created_at'])}*")
         else:
             st.caption("No activity yet")
 
-    # Change status
-    with st.expander("✏️ Change Status"):
+    with cd_tab_status:
         statuses_list = list(STATUS_FRIENDLY.items())
         current_idx = next((i for i, (s, _) in enumerate(statuses_list) if s == lead['status']), 0)
         selected = st.selectbox(
@@ -4513,8 +4630,7 @@ def show_customer_detail():
             st.success("✅ Updated!")
             st.rerun()
 
-    # Danger zone
-    with st.expander("⚠️ Other Actions"):
+    with cd_tab_actions:
         col1, col2 = st.columns(2)
 
         if col1.button("📅 Schedule follow-up in 7 days", use_container_width=True, key=f"fu_{lead_id}"):

@@ -53,23 +53,59 @@ SMTP_PRESETS = {
 }
 
 
-def save_smtp_config(provider, email, app_password, sender_name=""):
-    """Save SMTP config locally (encoded, not encrypted - for local use only)."""
-    import base64
+def _current_user_email():
+    """Return the currently-logged-in user's email, or None."""
+    try:
+        import streamlit as _st
+        return (_st.session_state.get('logged_in_user_email') or '').lower() or None
+    except Exception:
+        return None
 
+
+def save_smtp_config(provider, email, app_password, sender_name=""):
+    """Save SMTP config for the CURRENT logged-in user (per-user DB row).
+    Falls back to the legacy global JSON file if no logged-in user (dev mode)."""
+    user_email = _current_user_email()
+
+    if user_email:
+        try:
+            import database
+            preset = SMTP_PRESETS.get(provider, {})
+            database.smtp_save(user_email, {
+                'provider': provider,
+                'server': preset.get('server'),
+                'port': preset.get('port'),
+                'email': email,
+                'app_password': app_password,
+                'use_tls': preset.get('use_tls', True),
+                'imap_server': IMAP_PRESETS.get(provider, {}).get('server')
+                                if 'IMAP_PRESETS' in globals() else None,
+                'imap_port': IMAP_PRESETS.get(provider, {}).get('port')
+                              if 'IMAP_PRESETS' in globals() else 993,
+            })
+            try:
+                import audit_log
+                audit_log.log_login_event(email)
+            except Exception:
+                pass
+            return
+        except Exception:
+            pass
+
+    # Legacy fallback: global file (dev mode / no logged-in user)
+    import base64
     config = {
         'provider': provider,
         'email': email,
         'sender_name': sender_name,
         'app_password': base64.b64encode(app_password.encode()).decode()
     }
-
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f)
-
-    os.chmod(CONFIG_FILE, 0o600)
-
-    # Audit: login/auth event
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except Exception:
+        pass
     try:
         import audit_log
         audit_log.log_login_event(email)
@@ -78,20 +114,50 @@ def save_smtp_config(provider, email, app_password, sender_name=""):
 
 
 def load_smtp_config():
-    """Load SMTP config."""
-    import base64
+    """Load SMTP config — per-user from DB if logged in, else global file."""
+    user_email = _current_user_email()
+    if user_email:
+        try:
+            import database
+            cfg = database.smtp_get(user_email)
+            if cfg and cfg.get('smtp_email'):
+                return {
+                    'provider': cfg.get('provider', 'gmail'),
+                    'email': cfg['smtp_email'],
+                    'sender_name': '',
+                    'app_password': cfg.get('app_password', ''),
+                }
+        except Exception:
+            pass
 
+    # Legacy fallback
+    import base64
     if not Path(CONFIG_FILE).exists():
         return None
-
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-
         config['app_password'] = base64.b64decode(config['app_password']).decode()
         return config
     except Exception:
         return None
+
+
+def delete_smtp_config():
+    """Remove the current user's SMTP config so they can re-connect."""
+    user_email = _current_user_email()
+    if user_email:
+        try:
+            import database
+            database.smtp_delete(user_email)
+            return
+        except Exception:
+            pass
+    try:
+        if Path(CONFIG_FILE).exists():
+            os.remove(CONFIG_FILE)
+    except Exception:
+        pass
 
 
 def test_smtp_connection(provider, email, app_password):

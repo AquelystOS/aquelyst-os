@@ -437,6 +437,50 @@ def team_keys_mark_err(user_email, provider, error_text):
 # Admin allowlist — Joseph is the root admin (hardcoded). He can grant or
 # revoke admin to other team members via this table.
 # ============================================================================
+def global_search(query, limit_per_kind=20):
+    """Search across leads, inbound messages, and outreach drafts.
+    Returns dict with three lists: leads, inbound, drafts."""
+    if not query or not query.strip():
+        return {'leads': [], 'inbound': [], 'drafts': []}
+    q = f"%{query.strip()}%"
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''SELECT id, business_name, contact_name, email, business_type,
+                          city, state, status, lead_score
+                 FROM leads
+                 WHERE business_name LIKE ? OR contact_name LIKE ?
+                       OR email LIKE ? OR notes LIKE ? OR website LIKE ?
+                       OR pain_hypothesis LIKE ? OR product_fit LIKE ?
+                 ORDER BY lead_score DESC LIMIT ?''',
+              (q, q, q, q, q, q, q, limit_per_kind))
+    leads = [dict(r) for r in c.fetchall()]
+
+    c.execute('''SELECT i.id, i.lead_id, i.from_email, i.from_name, i.subject,
+                          i.body, i.received_at, i.intent, i.sentiment,
+                          l.business_name
+                 FROM inbound_messages i
+                 LEFT JOIN leads l ON i.lead_id = l.id
+                 WHERE COALESCE(i.is_junk, 0) = 0 AND
+                       (i.subject LIKE ? OR i.body LIKE ? OR i.from_email LIKE ?
+                        OR i.from_name LIKE ?)
+                 ORDER BY i.received_at DESC LIMIT ?''',
+              (q, q, q, q, limit_per_kind))
+    inbound = [dict(r) for r in c.fetchall()]
+
+    c.execute('''SELECT d.id, d.lead_id, d.message_type, d.subject, d.content,
+                          d.sent, d.created_at, l.business_name
+                 FROM outreach_drafts d
+                 LEFT JOIN leads l ON d.lead_id = l.id
+                 WHERE d.subject LIKE ? OR d.content LIKE ?
+                 ORDER BY d.id DESC LIMIT ?''',
+              (q, q, limit_per_kind))
+    drafts = [dict(r) for r in c.fetchall()]
+
+    conn.close()
+    return {'leads': leads, 'inbound': inbound, 'drafts': drafts}
+
+
 def admin_grant(user_email, granted_by):
     if not user_email:
         return False
