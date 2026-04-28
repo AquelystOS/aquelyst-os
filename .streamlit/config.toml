@@ -1,5 +1,7 @@
 [theme]
-primaryColor = "#1a5f3f"
+# AqueLyst brand: cyan (Aque) + lime (Lyst). primaryColor drives Streamlit's
+# default accents — keep aligned with --accent in app.py.
+primaryColor = "#06b6d4"
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f8f9fa"
 textColor = "#262730"

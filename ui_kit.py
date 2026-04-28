@@ -41,7 +41,7 @@ def page_hero(title, subtitle="", stats=None, eyebrow="AQUELYST OS",
 
     Args:
         title: HTML-allowed heading. Wrap accent words in
-               `<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);
+               `<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);
                -webkit-background-clip:text;-webkit-text-fill-color:transparent;
                background-clip:text'>X</span>` for cyan gradient.
         subtitle: Description below title (HTML allowed).

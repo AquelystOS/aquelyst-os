@@ -214,11 +214,15 @@ st.markdown("""
         --ink: #0a0f1c;
         --ink-soft: #475569;
         --ink-muted: #94a3b8;
+        /* AqueLyst brand: cyan (Aque) → lime (Lyst). The deep variant is
+           used for dark text on light backgrounds; the bright lime is for
+           accents on dark surfaces. */
         --accent: #06b6d4;
-        --accent-2: #1a5f3f;
-        --accent-glow: 0 0 24px rgba(6,182,212,0.35);
-        --grad: linear-gradient(135deg, #06b6d4 0%, #1a5f3f 100%);
-        --grad-soft: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(26,95,63,0.10));
+        --accent-2: #a3e635;          /* lime-400 — bright brand lime */
+        --accent-2-deep: #4d7c0f;     /* lime-700 — dark variant for text */
+        --accent-glow: 0 0 24px rgba(163,230,53,0.40);
+        --grad: linear-gradient(135deg, #06b6d4 0%, #a3e635 100%);
+        --grad-soft: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(163,230,53,0.12));
     }
 
     /* App background — subtle dot grid for tech feel */
@@ -1478,7 +1482,7 @@ def show_bid_opportunities():
 
     ui_kit.page_hero(
         title="Federal contracts matching "
-               "<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>AqueLyst products</span>",
         subtitle="Pulls active SAM.gov opportunities, scores them against AqueLyst's "
@@ -1612,7 +1616,7 @@ def _render_bid_opportunity_card(opp):
             f"<div style='display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.6rem'>"
             f"<span style='background:{score_color};color:white;padding:0.2rem 0.7rem;"
             f"border-radius:10px;font-size:0.78rem;font-weight:700'>SCORE {score}</span>"
-            f"<span style='background:#1a5f3f;color:white;padding:0.2rem 0.7rem;"
+            f"<span style='background:#4d7c0f;color:white;padding:0.2rem 0.7rem;"
             f"border-radius:10px;font-size:0.78rem;font-weight:700'>{product.upper()}</span>"
             f"<span style='background:{status_color};color:white;padding:0.2rem 0.7rem;"
             f"border-radius:10px;font-size:0.78rem;font-weight:700'>{status.upper()}</span>"
@@ -1727,7 +1731,7 @@ def show_top_nav():
     user_role = current.get('short_role') or current.get('role', '')
     is_known = not current.get('_unknown', False)
 
-    badge_color = '#1a5f3f' if is_known else '#9ca3af'
+    badge_color = '#4d7c0f' if is_known else '#9ca3af'
     role_html = (f"<span style='opacity:0.85;font-weight:400'> · {user_role}</span>"
                  if user_role else "")
 
@@ -2114,7 +2118,7 @@ def show_home():
             <div>
                 <div style='font-size:2.4rem;font-weight:700;color:#e2e8f0;
                             letter-spacing:-0.02em;line-height:1.05'>
-                    {greeting}, <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);
+                    {greeting}, <span style='background:linear-gradient(135deg,#06b6d4,#a3e635);
                                               -webkit-background-clip:text;
                                               -webkit-text-fill-color:transparent;
                                               background-clip:text'>{user_first}</span>.
@@ -2178,10 +2182,10 @@ def show_home():
     if stats['total_leads'] == 0:
         # ========== EMPTY STATE — push autopilot hard ==========
         st.markdown("""
-        <div style='background:#fff;border:2px dashed #1a5f3f;border-radius:14px;
+        <div style='background:#fff;border:2px dashed #4d7c0f;border-radius:14px;
                     padding:2.5rem 2rem;text-align:center;margin-bottom:1rem'>
             <div style='font-size:3.5rem'>🤖</div>
-            <h2 style='color:#1a5f3f !important;margin:0.5rem 0'>
+            <h2 style='color:#4d7c0f !important;margin:0.5rem 0'>
                 Your CRM is empty. Let's fix that in 2 minutes.
             </h2>
             <p style='color:#6c757d;font-size:1.05rem;max-width:500px;margin:0.5rem auto 1.5rem'>
@@ -2362,7 +2366,7 @@ def show_home():
                             box-shadow:0 1px 3px rgba(0,0,0,0.04)'>
                     <div style='display:flex;justify-content:space-between;align-items:start;gap:0.5rem'>
                         <div style='flex:1;min-width:0'>
-                            <div style='font-weight:700;color:#1a5f3f;font-size:1rem;
+                            <div style='font-weight:700;color:#4d7c0f;font-size:1rem;
                                         white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>
                                 {l['business_name']}
                             </div>
@@ -2555,7 +2559,7 @@ def _today_dashboard_charts():
             df = pd.DataFrame(funnel_data, columns=['Stage', 'Count'])
             df = df[df['Count'] > 0]
             if not df.empty:
-                st.bar_chart(df.set_index('Stage'), height=240, color='#1a5f3f')
+                st.bar_chart(df.set_index('Stage'), height=240, color='#4d7c0f')
         else:
             st.caption("_No pipeline data yet — start adding customers_")
 
@@ -2718,7 +2722,7 @@ def _home_activity_fragment():
                 'autopilot_drafted': '#6610f2',
                 'email_sent': '#0ea5e9',
                 'compose_send': '#0ea5e9',
-                'created': '#1a5f3f',
+                'created': '#4d7c0f',
                 'status_change': '#f59e0b',
                 'enrichment': '#8b5cf6',
                 'follow_up': '#fd7e14',
@@ -2764,7 +2768,7 @@ def show_autopilot():
 def _render_autopilot_locked():
     """When AI isn't configured — show the value prop and CTA to set it up."""
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Autopilot</span> needs an AI brain",
         subtitle="Connect Cerebras (free, 2 minutes) and Autopilot will scrape the open "
@@ -3005,14 +3009,14 @@ def _autopilot_live_fragment():
         action_label = f"📡 {action.title()}"
 
     st.markdown(f"""
-    <div style='background:#fff;border:1px solid #e9ecef;border-left:4px solid #1a5f3f;
+    <div style='background:#fff;border:1px solid #e9ecef;border-left:4px solid #4d7c0f;
                 padding:1rem 1.5rem;border-radius:8px;margin-bottom:1.5rem;
                 box-shadow:0 2px 8px rgba(0,0,0,0.04)'>
         <div style='font-size:0.85rem;color:#6c757d;margin-bottom:0.25rem;
                     text-transform:uppercase;letter-spacing:0.05em'>
             Right now
         </div>
-        <div style='font-size:1.1rem;font-weight:600;color:#1a5f3f'>
+        <div style='font-size:1.1rem;font-weight:600;color:#4d7c0f'>
             {action_label}
         </div>
         <div style='color:#495057;margin-top:0.25rem'>
@@ -3129,7 +3133,7 @@ def _render_autopilot_drill(drill):
                     </div>
                     <div style='background:#e9ecef;height:4px;border-radius:2px;
                                 margin-top:0.4rem;overflow:hidden'>
-                        <div style='background:#1a5f3f;height:100%;width:{pct}%'></div>
+                        <div style='background:#4d7c0f;height:100%;width:{pct}%'></div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -3167,7 +3171,7 @@ def _render_autopilot_drill(drill):
                             box-shadow:0 2px 4px rgba(0,0,0,0.04)'>
                     <div style='display:flex;justify-content:space-between;align-items:start'>
                         <div style='flex:1'>
-                            <div style='font-weight:700;color:#1a5f3f;font-size:1.05rem'>
+                            <div style='font-weight:700;color:#4d7c0f;font-size:1.05rem'>
                                 {lead['business_name']}
                             </div>
                             <div style='color:#6c757d;font-size:0.88rem;margin-top:0.15rem'>
@@ -3180,7 +3184,7 @@ def _render_autopilot_drill(drill):
                         </div>
                     </div>
                     <div style='margin-top:0.7rem;padding:0.6rem 0.8rem;background:#f8f9fa;
-                                border-left:3px solid #1a5f3f;border-radius:4px;
+                                border-left:3px solid #4d7c0f;border-radius:4px;
                                 font-size:0.88rem;color:#495057;font-style:italic'>
                         💡 {hook[:160]}{'...' if len(hook) > 160 else ''}
                     </div>
@@ -3243,7 +3247,7 @@ def _render_autopilot_idle(state):
     has_previous_run = last_stats and any(last_stats.values())
 
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Autonomous</span> lead generation",
         subtitle="AI scrapes horse businesses across the open web, qualifies each lead, "
@@ -3274,7 +3278,7 @@ def _render_autopilot_idle(state):
                     align-items:center;gap:1rem'>
             <div style='font-size:1.6rem'>{icon}</div>
             <div style='flex:1'>
-                <div style='font-weight:700;color:#1a5f3f'>{i+1}. {title}</div>
+                <div style='font-weight:700;color:#4d7c0f'>{i+1}. {title}</div>
                 <div style='color:#6c757d;font-size:0.92rem;margin-top:0.1rem'>{desc}</div>
             </div>
         </div>
@@ -3497,7 +3501,7 @@ def show_sales_bot():
     """Sales Bot page — control center for autonomous engagement + training chat."""
 
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Autonomous</span> NEPQ sales agent",
         subtitle="When a lead crosses your hot threshold, Aqua writes a Jeremy Miner-style "
@@ -3627,7 +3631,7 @@ def _show_freeform_chat():
     for msg in history:
         if msg['role'] == 'user':
             st.html(
-                f"<div style='background:linear-gradient(135deg,#06b6d4,#1a5f3f);"
+                f"<div style='background:linear-gradient(135deg,#06b6d4,#4d7c0f);"
                 f"color:white;padding:0.8rem 1.1rem;"
                 f"border-radius:14px 14px 4px 14px;margin-bottom:0.5rem;"
                 f"margin-left:18%;font-size:0.95rem;white-space:pre-wrap;"
@@ -4102,7 +4106,7 @@ def show_inbox():
     """Unified Inbox — see everything the bot is sending and receiving."""
 
     ui_kit.page_hero(
-        title="Everything the bot is <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="Everything the bot is <span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>sending &amp; receiving</span>",
         subtitle="Sent emails, drafts waiting for your approval, customer replies, "
@@ -4359,7 +4363,7 @@ def _render_inbound_card(msg, is_team=False):
         'positive': '😊', 'neutral': '😐', 'negative': '😟', 'hostile': '😡',
     }.get(sentiment, '😐')
 
-    border_color = '#3b82f6' if is_team else '#1a5f3f'
+    border_color = '#3b82f6' if is_team else '#4d7c0f'
 
     with st.container():
         # Inline header row with quick "Not real" dismiss button so junk can be
@@ -4882,7 +4886,7 @@ def show_customers():
     """Customer hub — 6 tabs organized by how a sales team actually navigates leads."""
 
     ui_kit.page_hero(
-        title="Your team's <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="Your team's <span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>CRM</span>",
         subtitle="Action queue, pipeline, by product, federal bids, full search, "
@@ -5027,7 +5031,7 @@ def _render_pipeline_view(leads):
         ('new', '🆕 New', '#94a3b8'),
         ('researched', '🔍 Researched', '#06b6d4'),
         ('drafted', '✍️ Drafted', '#0ea5e9'),
-        ('contacted', '📤 Contacted', '#1a5f3f'),
+        ('contacted', '📤 Contacted', '#4d7c0f'),
         ('follow_up_due', '🔁 Follow-up due', '#f59e0b'),
         ('interested', '⭐ Interested', '#16a34a'),
         ('trial_offered', '🎁 Trial offered', '#a855f7'),
@@ -5413,7 +5417,7 @@ def _render_conversation_thread(thread, lead, key_ns=""):
 
             st.html(
                 f"<div style='display:flex;justify-content:flex-end;margin:0.6rem 0'>"
-                f"<div style='max-width:85%;background:linear-gradient(135deg,#1a5f3f 0%,#2d8659 100%);"
+                f"<div style='max-width:85%;background:linear-gradient(135deg,#4d7c0f 0%,#65a30d 100%);"
                 f"color:white;padding:0.9rem 1.2rem;border-radius:14px 14px 4px 14px;"
                 f"box-shadow:0 2px 6px rgba(26,95,63,0.18)'>"
                 f"<div style='font-size:0.7rem;opacity:0.85;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:0.25rem'>"
@@ -5547,7 +5551,7 @@ def show_send_message():
 
     ui_kit.page_hero(
         title="Write to anyone · "
-               "<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>see sent</span> · review drafts",
         subtitle="Email any address. AI drafts it. Every send is logged. "
@@ -6340,7 +6344,7 @@ def show_add_customer():
 # ===========================================================================
 def show_find_customers():
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Find</span> new customers",
         subtitle="Search Google Maps for horse barns and AqueLyst-fit businesses in "
@@ -6386,7 +6390,7 @@ def show_find_customers():
         with col2:
             st.markdown(
                 f"<a href='{url}' target='_blank' style='text-decoration:none'>"
-                f"<button style='background:#1a5f3f;color:white;border:none;padding:0.5rem;"
+                f"<button style='background:#4d7c0f;color:white;border:none;padding:0.5rem;"
                 f"border-radius:8px;width:100%;font-weight:600;cursor:pointer;margin-top:0.5rem'>"
                 f"Search Maps →</button></a>",
                 unsafe_allow_html=True
@@ -6438,7 +6442,7 @@ def show_audit_log():
     For legal + records-keeping compliance."""
 
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Complete</span> transaction history",
         subtitle="Every email, lead change, login, bot action — recorded down to the second "
@@ -6531,7 +6535,7 @@ def _audit_status_fragment():
 
     cols = st.columns(5)
     metrics = [
-        ('📋', 'Total Events', total, '#1a5f3f'),
+        ('📋', 'Total Events', total, '#4d7c0f'),
         ('📤', 'Emails Sent', sent_count, '#0ea5e9'),
         ('📨', 'Emails Received', received_count, '#8b5cf6'),
         ('🤖', 'Bot Actions', bot_count, '#7c3aed'),
@@ -6613,7 +6617,7 @@ def show_setup():
     chips.append(("Web form ready", "#06b6d4"))
 
     ui_kit.page_hero(
-        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
                "background-clip:text'>Configure</span> your operating system",
         subtitle="Connect email + AI providers, manage the team, edit the product catalog, "
@@ -6912,7 +6916,7 @@ def setup_email_tab():
 
     # Visual progress bar
     bars_html = ''.join([
-        f"<div style='flex:1;height:6px;border-radius:3px;background:{'#1a5f3f' if i < step + 1 else '#e2e8f0'}'></div>"
+        f"<div style='flex:1;height:6px;border-radius:3px;background:{'#4d7c0f' if i < step + 1 else '#e2e8f0'}'></div>"
         for i in range(total_steps)
     ])
     st.html(
@@ -6929,7 +6933,7 @@ def setup_email_tab():
         st.html(
             "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:1.5rem 2rem;margin-bottom:1rem'>"
             "<div style='display:flex;align-items:center;gap:1rem'>"
-            "<div style='width:44px;height:44px;background:#1a5f3f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>1</div>"
+            "<div style='width:44px;height:44px;background:#4d7c0f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>1</div>"
             "<div>"
             "<div style='font-size:1.3rem;font-weight:700;color:#0f172a'>What email do you want to send from?</div>"
             "<div style='color:#64748b;font-size:0.92rem;margin-top:0.2rem'>This is the email your customers will see in their inbox.</div>"
@@ -6970,7 +6974,7 @@ def setup_email_tab():
         st.html(
             f"<div style='background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:1.5rem 2rem;margin-bottom:1rem'>"
             f"<div style='display:flex;align-items:center;gap:1rem'>"
-            f"<div style='width:44px;height:44px;background:#1a5f3f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>2</div>"
+            f"<div style='width:44px;height:44px;background:#4d7c0f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>2</div>"
             f"<div>"
             f"<div style='font-size:1.3rem;font-weight:700;color:#0f172a'>Get your App Password</div>"
             f"<div style='color:#64748b;font-size:0.92rem;margin-top:0.2rem'>"
@@ -7087,7 +7091,7 @@ On that page:
         st.html(
             "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:1.5rem 2rem;margin-bottom:1rem'>"
             "<div style='display:flex;align-items:center;gap:1rem'>"
-            "<div style='width:44px;height:44px;background:#1a5f3f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>3</div>"
+            "<div style='width:44px;height:44px;background:#4d7c0f;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.2rem;flex-shrink:0'>3</div>"
             "<div>"
             "<div style='font-size:1.3rem;font-weight:700;color:#0f172a'>Paste your App Password</div>"
             f"<div style='color:#64748b;font-size:0.92rem;margin-top:0.2rem'>"
