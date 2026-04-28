@@ -137,7 +137,19 @@ class _PgCursor:
                 except Exception:
                     pass
 
-        self._cursor.execute(translated, params or ())
+        try:
+            self._cursor.execute(translated, params or ())
+        except Exception:
+            # Postgres puts the whole transaction into "aborted" state on any
+            # query failure — every subsequent query then raises
+            # InFailedSqlTransaction. Rolling back here clears that state so
+            # the caller's `except` can keep going (e.g. best-effort ALTER
+            # TABLE schema upgrades).
+            try:
+                self._cursor.connection.rollback()
+            except Exception:
+                pass
+            raise
         return self
 
     def fetchall(self):

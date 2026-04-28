@@ -134,7 +134,7 @@ def init_db():
                                 ('junk_reason', 'TEXT')]:
         try:
             c.execute(f'ALTER TABLE inbound_messages ADD COLUMN {col_name} {col_def}')
-        except db_backend.OperationalError:
+        except Exception:
             pass
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)')
@@ -247,7 +247,7 @@ def init_db():
         try:
             c.execute(f'ALTER TABLE provider_connection_log ADD COLUMN {col} '
                       f'{"INTEGER DEFAULT 0" if col != "last_used_at" else "TEXT"}')
-        except db_backend.OperationalError:
+        except Exception:
             pass  # column already exists
 
     conn.commit()
