@@ -800,9 +800,10 @@ def generate_initial_outreach(lead_data):
 
     Returns: dict with subject, body, source
     """
-    business = lead_data.get('business_name', 'their barn')
-    contact = lead_data.get('contact_name') or 'there'
-    first_name = contact.split()[0] if contact != 'there' else 'there'
+    business = lead_data.get('business_name', 'their business')
+    raw_contact = (lead_data.get('contact_name') or '').strip()
+    has_name = bool(raw_contact and raw_contact.lower() not in ('there', 'unknown', 'n/a'))
+    first_name = raw_contact.split()[0] if has_name else ''
     pain = lead_data.get('pain_hypothesis') or lead_data.get('message') or ''
     notes = lead_data.get('notes') or ''
     location = ''
@@ -819,11 +820,18 @@ def generate_initial_outreach(lead_data):
     current_user = team.get_current_user()
     sender_first = current_user['name'].split()[0] if current_user.get('name') else 'there'
 
+    name_line = (
+        f"- Contact (first name): {first_name}"
+        if has_name else
+        "- Contact (first name): UNKNOWN — open with 'Hello,' or 'Hi there,' or "
+        "jump straight in. NEVER write [Name], [Prospect], [First Name], or any "
+        "bracketed placeholder. Just acknowledge the absence by being direct."
+    )
     user_msg = f"""Generate the FIRST cold email to this prospect.
 
 PROSPECT:
 - Business: {business}
-- Contact (first name): {first_name}
+{name_line}
 - Location: {location or 'unknown'}
 - Known pain/problem: {pain or 'unknown — you may need to use a generic curiosity opener'}
 - Personalized hook from research: {hook or 'none'}
@@ -860,8 +868,9 @@ def generate_aqua_intro(lead_data):
     If recipient is on the AqueLyst team → casual internal peer message, no pitch.
     Otherwise → external prospect intro with AI-disclosure and gentle offer.
     """
-    contact = lead_data.get('contact_name') or ''
-    first_name = (contact.split()[0] if contact else '').strip().title() or 'there'
+    raw_contact = (lead_data.get('contact_name') or '').strip()
+    has_name = bool(raw_contact and raw_contact.lower() not in ('there', 'unknown', 'n/a'))
+    first_name = (raw_contact.split()[0].strip().title() if has_name else '')
     recipient_email = (lead_data.get('email') or '').lower().strip()
 
     current_user = team.get_current_user()

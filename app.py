@@ -2300,12 +2300,28 @@ def _inbox_status_fragment():
         watcher_bg = '#dcfce7' if watcher_running else '#fef2f2'
         watcher_label = '🟢 WATCHING' if watcher_running else '🔴 OFF'
         watcher_icon = '👁️‍🗨️' if watcher_running else '👁'
+
+        # Surface last-checked + next-check so user can SEE the watcher polling
+        sub_line = ""
+        if watcher_running:
+            try:
+                wstate = email_responder.get_state() or {}
+                last_run = wstate.get('last_run')
+                next_check = wstate.get('next_check')
+                if last_run:
+                    sub_line = f"last {format_date_friendly(last_run)}"
+                if next_check:
+                    sub_line += f" · next {format_date_friendly(next_check)}"
+            except Exception:
+                pass
+
         st.html(
             f"<div style='background:{watcher_bg};border:2px solid {watcher_color};border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
             f"<div style='font-size:1.5rem'>{watcher_icon}</div>"
             f"<div style='font-size:0.95rem;font-weight:800;color:{watcher_color};margin-top:0.2rem'>{watcher_label}</div>"
+            f"<div style='font-size:0.65rem;color:#64748b;font-weight:500;margin-top:0.2rem;height:0.85rem'>{sub_line}</div>"
             f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.2rem'>"
-            f"Inbox Watcher</div></div>"
+            f"Inbox Watcher (every 5min)</div></div>"
         )
         toggle_label = "Click to STOP" if watcher_running else "Click to START"
         if st.button(toggle_label, key="inbox_card_watcher_toggle", use_container_width=True):
@@ -2317,28 +2333,50 @@ def _inbox_status_fragment():
 
     # AUTO-ENGAGEMENT — clickable TOGGLE
     with cols[3]:
+        # Read user's preferred mode (auto-send vs draft) from session
+        eng_auto_send = st.session_state.get('engagement_auto_send', True)
+        cfg = (auto_engagement.get_state() or {}).get('config', {})
+        running_auto_send = cfg.get('auto_send', False) if engagement_running else None
+
         eng_color = '#16a34a' if engagement_running else '#dc2626'
         eng_bg = '#dcfce7' if engagement_running else '#fef2f2'
-        eng_label = '🟢 ON' if engagement_running else '🔴 OFF'
+        if engagement_running:
+            mode_text = '🚀 AUTO-SEND' if running_auto_send else '✍️ DRAFTING'
+        else:
+            mode_text = '🔴 OFF'
         st.html(
             f"<div style='background:{eng_bg};border:2px solid {eng_color};border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
             f"<div style='font-size:1.5rem'>🚀</div>"
-            f"<div style='font-size:0.95rem;font-weight:800;color:{eng_color};margin-top:0.2rem'>{eng_label}</div>"
+            f"<div style='font-size:0.85rem;font-weight:800;color:{eng_color};margin-top:0.2rem'>{mode_text}</div>"
             f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.2rem'>"
             f"Auto-Engagement</div></div>"
         )
-        toggle_label = "Click to STOP" if engagement_running else "Click to START"
-        if st.button(toggle_label, key="inbox_card_engagement_toggle", use_container_width=True):
-            if engagement_running:
+        if not engagement_running:
+            # Mode picker shown BEFORE start so user picks intent explicitly
+            new_auto_send = st.checkbox(
+                "Auto-send (no approval)",
+                value=eng_auto_send,
+                key="engagement_auto_send_inline",
+                help="If checked, Aqua actually sends emails. If unchecked, "
+                     "she only drafts and waits for your approval.",
+            )
+            st.session_state['engagement_auto_send'] = new_auto_send
+            if st.button("▶️ START", key="inbox_card_engagement_toggle",
+                          use_container_width=True, type="primary"):
+                auto_engagement.start_engagement(
+                    min_score=70,
+                    auto_send=new_auto_send,
+                    check_interval_minutes=15,
+                    max_per_run=5,
+                    follow_up_enabled=True,
+                )
+                st.rerun()
+        else:
+            if st.button("⏸ STOP", key="inbox_card_engagement_toggle",
+                          use_container_width=True):
                 auto_engagement.stop_engagement()
                 auto_engagement.update_state(running=False, config={})
-            else:
-                auto_engagement.start_engagement(
-                    min_score=70, auto_send=False,
-                    check_interval_minutes=15, max_per_run=5,
-                    follow_up_enabled=True
-                )
-            st.rerun()
+                st.rerun()
 
 
 def _today_dashboard_charts():

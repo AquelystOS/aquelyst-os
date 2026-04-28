@@ -39,8 +39,9 @@ Output ONLY the message body. No preamble, no explanations, no markdown formatti
 def _build_user_prompt(message_type, lead_data):
     """Build context-rich prompt for AI. Forces AI to engage with the SPECIFIC
     prospect's research data — not write generic templates."""
-    contact = lead_data.get('contact_name') or 'there'
-    first_name = contact.split()[0] if contact and contact != 'there' else 'there'
+    raw_contact = (lead_data.get('contact_name') or '').strip()
+    has_name = bool(raw_contact and raw_contact.lower() not in ('there', 'unknown', 'n/a'))
+    first_name = raw_contact.split()[0] if has_name else ''
     business = lead_data.get('business_name', '')
     business_type = lead_data.get('business_type', 'unknown')
     pain = lead_data.get('pain_hypothesis') or lead_data.get('message') or ''
@@ -66,11 +67,19 @@ def _build_user_prompt(message_type, lead_data):
     except Exception:
         pass
 
+    name_line = (
+        f"- Contact first name: {first_name}"
+        if has_name else
+        "- Contact first name: UNKNOWN — DO NOT use any name in greeting. "
+        "Open with 'Hello,' or 'Hi there,' or jump straight into the message. "
+        "NEVER write a placeholder like [Name], [Prospect], [First Name], "
+        "or [Contact]. Treat absence of a name as a signal to be more direct."
+    )
     context = f"""PROSPECT DATA (use these specifics — don't write a generic email):
 - Business: {business or '(unknown — flag in subject)'}
 - Type: {business_type}
 - Product fit (per research): {product_fit}
-- Contact first name: {first_name}
+{name_line}
 - Location: {location}
 - Website: {website or 'none'}
 - Specific fact / hook from website research: {hook or '(none — must reference business type + location)'}
