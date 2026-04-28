@@ -12,12 +12,44 @@ from pathlib import Path
 
 KEYS_FILE = "api_keys.json"
 
+# Sentinel user_email row in the team_api_keys table that holds the team's
+# shared baseline keys (the ones the Admin UI saves). Survives Streamlit Cloud
+# reboots when DATABASE_URL is configured to Postgres — unlike api_keys.json,
+# which is on the ephemeral container filesystem.
+_SHARED_USER = '__shared_baseline__'
+
 # Hardcoded fallbacks — only used if st.secrets / env var / local file all fail.
 # These keep the cloud deploy working even if Streamlit secrets aren't set.
 # REPO MUST BE PRIVATE — these leak via GitHub if public.
 _HARDCODED_FALLBACKS = {
     'cerebras': 'csk-yx4v98d5kpprjvdcdc9x82j2ddmdmwcfvemvfpt36m35942k',
 }
+
+
+def _save_to_team_table(provider, api_key):
+    """Persist to team_api_keys (Postgres on cloud, SQLite locally) so saves
+    survive container reboots. Best-effort — failures don't break the save."""
+    try:
+        import database
+        database.team_keys_save(_SHARED_USER, provider, api_key, label='shared baseline')
+    except Exception:
+        pass
+
+
+def _get_from_team_table(provider):
+    try:
+        import database
+        return database.team_keys_get_for_user(_SHARED_USER, provider)
+    except Exception:
+        return None
+
+
+def _delete_from_team_table(provider):
+    try:
+        import database
+        database.team_keys_delete(_SHARED_USER, provider)
+    except Exception:
+        pass
 
 
 def _load_raw():
@@ -40,19 +72,25 @@ def _save_raw(data):
 
 
 def set_key(provider, api_key):
-    """Save an API key for a provider."""
+    """Save an API key for a provider. Writes to BOTH the local encoded file
+    (so local dev keeps working without a DB) AND the team_api_keys table
+    (so cloud deploys survive container reboots when Postgres is configured)."""
     data = _load_raw()
     data[provider] = base64.b64encode(api_key.encode()).decode()
     _save_raw(data)
+    _save_to_team_table(provider, api_key.strip())
 
 
 def get_key(provider):
     """Retrieve an API key for a provider.
 
     Priority order:
-    1. Streamlit secrets (cloud deployment) — `st.secrets["CEREBRAS_API_KEY"]` etc.
+    1. Streamlit secrets — `st.secrets["CEREBRAS_API_KEY"]` etc.
     2. Environment variables — `CEREBRAS_API_KEY`
-    3. Local encoded file (api_keys.json) — for local dev installs
+    3. team_api_keys table (shared baseline row) — Postgres on cloud (persistent)
+       or SQLite locally. This is what the Admin UI's "save key" button writes to.
+    4. Local encoded file (api_keys.json) — legacy / dev mode.
+    5. Hardcoded fallback (last resort, only Cerebras).
     """
     # 1. Try Streamlit secrets first (works in cloud + when user has set them locally)
     try:
@@ -74,7 +112,13 @@ def get_key(provider):
     if env_value:
         return env_value
 
-    # 3. Local file (legacy / dev mode)
+    # 3. Shared-baseline row in team_api_keys (persistent across Cloud reboots
+    # when DATABASE_URL points to Postgres)
+    table_val = _get_from_team_table(provider)
+    if table_val:
+        return table_val
+
+    # 4. Local file (legacy / dev mode)
     data = _load_raw()
     encoded = data.get(provider)
     if encoded:
@@ -83,18 +127,19 @@ def get_key(provider):
         except Exception:
             pass
 
-    # 4. Hardcoded fallback (cloud-deploy safety net — keep repo private!)
+    # 5. Hardcoded fallback (cloud-deploy safety net — keep repo private!)
     return _HARDCODED_FALLBACKS.get(provider)
 
 
 def delete_key(provider):
-    """Remove an API key."""
+    """Remove an API key from BOTH the local file and the team table."""
     data = _load_raw()
-    if provider in data:
+    existed_locally = provider in data
+    if existed_locally:
         del data[provider]
         _save_raw(data)
-        return True
-    return False
+    _delete_from_team_table(provider)
+    return existed_locally or _get_from_team_table(provider) is None
 
 
 def has_key(provider):
