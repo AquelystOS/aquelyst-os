@@ -105,6 +105,20 @@ def load_team(include_self_registered=True):
         except Exception:
             roster = list(DEFAULT_TEAM)
 
+    # Defensive dedup of the persisted roster — if team_members.json got
+    # duplicate entries from any past bug, drop them here. Keeps the FIRST
+    # occurrence of each email (preserves manual ordering).
+    seen_emails = set()
+    deduped_roster = []
+    for m in roster:
+        email = (m.get('email') or '').lower().strip()
+        if email and email in seen_emails:
+            continue
+        if email:
+            seen_emails.add(email)
+        deduped_roster.append(m)
+    roster = deduped_roster
+
     if not include_self_registered:
         return roster
 
@@ -115,11 +129,11 @@ def load_team(include_self_registered=True):
     except Exception:
         accounts = []
 
-    roster_emails = {(m.get('email') or '').lower().strip() for m in roster}
     for acc in accounts:
         email = (acc.get('email') or '').lower().strip()
-        if not email or email in roster_emails:
+        if not email or email in seen_emails:
             continue
+        seen_emails.add(email)
         local = email.split('@')[0]
         # "joe.smith" / "joe-smith" / "joe_smith" → "Joe Smith"
         cleaned = local.replace('.', ' ').replace('_', ' ').replace('-', ' ')
