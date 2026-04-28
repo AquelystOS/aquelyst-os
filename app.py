@@ -106,66 +106,87 @@ def _check_password():
         "</div>"
     )
 
-    # Login mode: existing user enters email + password.
-    # If no account yet, they set one (only Joseph or anyone added by admin can do this).
     member_options = [(m['email'], f"{m.get('name', '?')} ({m['email']})")
                        for m in members if m.get('email')]
     member_options.append(('__custom__', 'Other email (not on team list yet)'))
 
+    just_created = st.session_state.get('just_created_account')
+    if just_created:
+        st.success(
+            f"✅ Account created for **{just_created}**. "
+            f"Now sign in with your new password to confirm."
+        )
+
+    # Step A: pick your email (outside the form so the form rerenders correctly
+    # when the user selects a different person)
+    sel = st.selectbox(
+        "Who are you?", member_options,
+        format_func=lambda o: o[1],
+        key="login_pick_user",
+        index=next((i for i, (e, _) in enumerate(member_options)
+                     if e == (just_created or '').lower()), 0),
+    )
+    custom_email = ""
+    if sel and sel[0] == '__custom__':
+        custom_email = st.text_input("Your email", key="login_custom_email")
+    chosen_email = (custom_email or (sel[0] if sel else '')).strip().lower()
+    if chosen_email == '__custom__':
+        chosen_email = ''
+
+    has_account = database.user_account_exists(chosen_email) if chosen_email else False
+
     with st.container(border=True):
-        st.markdown("##### Sign in")
-        with st.form("user_login_form"):
-            sel = st.selectbox("Who are you?", member_options,
-                                format_func=lambda o: o[1])
-            custom_email = ""
-            if sel and sel[0] == '__custom__':
-                custom_email = st.text_input("Your email")
-            chosen_email = (custom_email or sel[0]).strip().lower() if sel else ''
-
-            if chosen_email and chosen_email != '__custom__':
-                has_account = database.user_account_exists(chosen_email)
-            else:
-                has_account = False
-
-            if has_account:
+        if has_account:
+            st.markdown(f"##### 🔐 Sign in as `{chosen_email}`")
+            with st.form("user_login_form", clear_on_submit=False):
                 pw = st.text_input("Your password", type="password",
                                     placeholder="•••••••")
-                login_btn = st.form_submit_button("Log in →", type="primary",
-                                                    use_container_width=True)
-                if login_btn:
-                    if database.user_check_password(chosen_email, pw):
-                        st.session_state.logged_in_user_email = chosen_email
-                        database.user_record_login(chosen_email)
-                        st.rerun()
-                    else:
-                        st.error("❌ Wrong password for that account")
-            else:
-                st.caption(f"_No account yet for `{chosen_email or '...'}` — set one now._")
-                pw1 = st.text_input("Choose a password (min 6 chars)",
+                login_btn = st.form_submit_button(
+                    "Log in →", type="primary", use_container_width=True,
+                )
+            if login_btn:
+                if database.user_check_password(chosen_email, pw):
+                    st.session_state.logged_in_user_email = chosen_email
+                    st.session_state.pop('just_created_account', None)
+                    database.user_record_login(chosen_email)
+                    st.rerun()
+                else:
+                    st.error("❌ Wrong password for that account")
+        elif chosen_email:
+            st.markdown(f"##### 🆕 Create account for `{chosen_email}`")
+            st.caption(
+                "First time signing in. Pick a password, type it twice, and confirm. "
+                "After you create the account you'll log in normally with that password."
+            )
+            with st.form("user_create_form", clear_on_submit=False):
+                pw1 = st.text_input("Choose a password (min 6 characters)",
                                      type="password",
                                      placeholder="•••••••")
-                pw2 = st.text_input("Confirm password", type="password",
+                pw2 = st.text_input("Type it again to confirm", type="password",
                                      placeholder="•••••••")
-                set_btn = st.form_submit_button("Create my account →",
-                                                  type="primary",
-                                                  use_container_width=True)
-                if set_btn:
-                    if not chosen_email or chosen_email == '__custom__':
-                        st.error("Pick your email first.")
-                    elif len(pw1) < 6:
-                        st.error("Password must be at least 6 characters.")
-                    elif pw1 != pw2:
-                        st.error("Passwords don't match.")
-                    else:
-                        database.user_set_password(chosen_email, pw1)
-                        st.session_state.logged_in_user_email = chosen_email
-                        database.user_record_login(chosen_email)
-                        st.success(f"✅ Account created for {chosen_email}")
-                        st.rerun()
+                set_btn = st.form_submit_button(
+                    "✅ Create my account",
+                    type="primary", use_container_width=True,
+                )
+            if set_btn:
+                if not pw1 or not pw2:
+                    st.error("Both password fields are required.")
+                elif len(pw1) < 6:
+                    st.error("Password must be at least 6 characters.")
+                elif pw1 != pw2:
+                    st.error("Passwords don't match — type it the same way twice.")
+                else:
+                    database.user_set_password(chosen_email, pw1)
+                    # Don't auto-login. Force them to log in with the new password
+                    # so we know they typed it correctly.
+                    st.session_state['just_created_account'] = chosen_email
+                    st.rerun()
+        else:
+            st.info("Pick your email above to continue.")
 
     st.caption(
-        "Need to reset your password? Ask Joseph (root admin) to wipe it for you "
-        "in 🛡 Admin → 👥 Team."
+        "Forgot your password? Ask Joseph (root admin) to reset it in "
+        "🛡 Admin → 👥 Team → \"Reset PW\"."
     )
     return False
 
@@ -987,11 +1008,33 @@ def _admin_keys_section():
     # Persistence warning — Streamlit Cloud's filesystem is ephemeral
     import cloud_mode as _cm
     if _cm.is_cloud():
+        # If admin just saved a key, surface the persistence step VERY prominently
+        just_saved = st.session_state.get('just_saved_baseline')
+        if just_saved:
+            meta = api_keys.get_provider_meta(just_saved) or {'name': just_saved}
+            saved_key = api_keys.get_key(just_saved) or ''
+            env_name = f"{just_saved.upper()}_API_KEY"
+            st.error(
+                f"⚠️ **{meta['name']} key saved BUT will vanish on next Streamlit Cloud redeploy.**  \n\n"
+                "Streamlit Cloud's filesystem is ephemeral — keys live in container memory only. "
+                "**To make it permanent right now**, copy this one line into "
+                "Streamlit Cloud → ⋮ → Settings → Secrets (add to existing block):"
+            )
+            st.code(f'{env_name} = "{saved_key}"', language='toml')
+            cc1, cc2 = st.columns(2)
+            if cc1.button("✅ I pasted it into Streamlit secrets", key="dismiss_save_warn",
+                           type="primary", use_container_width=True):
+                st.session_state.pop('just_saved_baseline', None)
+                st.rerun()
+            cc2.caption("Or skip if you'll re-add the key after each redeploy.")
+            st.markdown("---")
+
         st.warning(
-            "⚠️ **Important — Streamlit Cloud has an ephemeral filesystem.** "
+            "⚠️ **Streamlit Cloud has an ephemeral filesystem.** "
             "Keys saved here work for this container's lifetime, but get **wiped on each redeploy**. "
-            "Scroll to the bottom for the **TOML snippet** you must paste into Streamlit Cloud → Settings → Secrets "
-            "to make them permanent across restarts."
+            "After saving, paste the **TOML snippet** at the bottom of this page into "
+            "Streamlit Cloud → Settings → Secrets to make them permanent.  \n"
+            "_(Persistent storage via Postgres is the next major upgrade — coming soon.)_"
         )
 
     for prov_meta in api_keys.PROVIDER_CATALOG:
@@ -1067,6 +1110,8 @@ def _admin_keys_section():
                                 )
                                 if ok:
                                     api_keys.set_key(pid, new_k.strip())
+                                    if _cm.is_cloud():
+                                        st.session_state['just_saved_baseline'] = pid
                                     st.success(
                                         f"✅ {prov_meta['name']} key saved + verified "
                                         f"(model: `{model}`)"
