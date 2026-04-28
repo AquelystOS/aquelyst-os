@@ -577,6 +577,67 @@ st.markdown("""
             max-width: 100% !important;
         }
 
+        /* ======= FORCE-STACK st.columns ON MOBILE BY DEFAULT =======
+           Streamlit columns squish ugly on phones. Wrap every horizontal
+           block onto multiple rows with each column taking full width. */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 0.5rem !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+            flex: 1 1 100% !important;
+            min-width: 0 !important;
+            width: 100% !important;
+        }
+
+        /* ======= EXCEPTION: Top toolbar (logo + search + signout) =======
+           Mobile: hide the search bar entirely, keep logo on the left and
+           a small signout button on the right. Identified via the marker
+           div inside its dedicated st.container(). */
+        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
+          > [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            display: grid !important;
+            grid-template-columns: 1fr auto !important;
+            gap: 0.5rem !important;
+        }
+        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
+          > [data-testid="stHorizontalBlock"]
+          > [data-testid="column"] {
+            flex: unset !important;
+            width: auto !important;
+        }
+        /* Hide the middle column (search bar) on mobile */
+        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
+          > [data-testid="stHorizontalBlock"]
+          > [data-testid="column"]:nth-child(2) {
+            display: none !important;
+        }
+        /* Compact the right column (signout button) so it stays small */
+        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
+          > [data-testid="stHorizontalBlock"]
+          > [data-testid="column"]:nth-child(3) {
+            justify-self: end !important;
+        }
+
+        /* ======= EXCEPTION: Nav buttons row =======
+           7 buttons would stack to 7 rows under the global rule — that's
+           too much vertical space. Instead, make it a 2-column grid so
+           it becomes 4 rows of 2 (or 3+3+1 if 6 buttons). */
+        [data-testid="stVerticalBlock"]:has(> div .aqp-navrow-marker)
+          > [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            display: grid !important;
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 0.4rem !important;
+        }
+        [data-testid="stVerticalBlock"]:has(> div .aqp-navrow-marker)
+          > [data-testid="stHorizontalBlock"]
+          > [data-testid="column"] {
+            flex: unset !important;
+            width: auto !important;
+        }
+
         /* Heroes — squeeze padding + corner radius */
         [style*="background:linear-gradient(135deg,#0a0f1c"] {
             padding: 1.0rem 1.1rem !important;
@@ -1967,34 +2028,42 @@ def show_top_nav():
     role_html = (f"<span style='opacity:0.85;font-weight:400'> · {user_role}</span>"
                  if user_role else "")
 
-    top_left, top_search, top_right = st.columns([3, 3, 1])
-    top_left.html(
-        "<div style='display:flex;align-items:center;gap:0.8rem;padding:0.2rem 0'>"
-        f"{ui_kit.brand_wordmark(size='md', with_mark=True)}"
-        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.66rem;"
-        f"color:#94a3b8;letter-spacing:0.20em;text-transform:uppercase;"
-        f"font-weight:700;align-self:center'>OS</span>"
-        f"<span style='background:{badge_color};color:white;padding:0.25rem 0.8rem;"
-        f"border-radius:12px;font-weight:600;font-size:0.85rem;align-self:center'>"
-        f"{user_name}{role_html}"
-        f"</span></div>"
-    )
-    with top_search:
-        sq = st.text_input(
-            "Global search", value=st.session_state.get('search_query', ''),
-            placeholder="🔍 Search leads, inbox, drafts…",
-            label_visibility="collapsed", key="search_input"
+    # st.container() gives this row its own stVerticalBlock — combined with
+    # the empty marker div, mobile CSS can :has() select it specifically to
+    # reshape (hide search, keep logo + signout side-by-side).
+    with st.container():
+        st.markdown('<div class="aqp-toprow-marker"></div>',
+                     unsafe_allow_html=True)
+        top_left, top_search, top_right = st.columns([3, 3, 1])
+        top_left.html(
+            "<div style='display:flex;align-items:center;gap:0.8rem;padding:0.2rem 0'>"
+            f"{ui_kit.brand_wordmark(size='md', with_mark=True)}"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.66rem;"
+            f"color:#94a3b8;letter-spacing:0.20em;text-transform:uppercase;"
+            f"font-weight:700;align-self:center'>OS</span>"
+            f"<span style='background:{badge_color};color:white;padding:0.25rem 0.8rem;"
+            f"border-radius:12px;font-weight:600;font-size:0.85rem;align-self:center'>"
+            f"{user_name}{role_html}"
+            f"</span></div>"
         )
-        if sq and sq.strip() and sq.strip() != st.session_state.get('search_query', ''):
-            st.session_state.search_query = sq.strip()
-            st.session_state.page = "search"
+        with top_search:
+            sq = st.text_input(
+                "Global search", value=st.session_state.get('search_query', ''),
+                placeholder="🔍 Search leads, inbox, drafts…",
+                label_visibility="collapsed", key="search_input",
+            )
+            if sq and sq.strip() and sq.strip() != st.session_state.get('search_query', ''):
+                st.session_state.search_query = sq.strip()
+                st.session_state.page = "search"
+                st.rerun()
+        if top_right.button("🚪 Sign out", key="signout_btn",
+                             use_container_width=True):
+            st.session_state.pop('logged_in_user_email', None)
+            st.session_state.pop('team_password_ok', None)
             st.rerun()
-    if top_right.button("🚪 Sign out", key="signout_btn", use_container_width=True):
-        st.session_state.pop('logged_in_user_email', None)
-        st.session_state.pop('team_password_ok', None)
-        st.rerun()
-    st.markdown("<div style='border-bottom:1px solid #f1f5f9;margin:0 0 0.6rem 0'></div>",
-                 unsafe_allow_html=True)
+
+    st.markdown("<div style='border-bottom:1px solid rgba(148,163,184,0.10);"
+                 "margin:0 0 0.6rem 0'></div>", unsafe_allow_html=True)
 
     nav_items = [
         ("🚀 Operations", "operations"),
@@ -2006,22 +2075,27 @@ def show_top_nav():
     ]
     if is_admin():
         nav_items.append(("🛡 Admin", "admin"))
-    cols = st.columns(len(nav_items))
-    for col, (label, page_id) in zip(cols, nav_items):
-        with col:
-            is_active = st.session_state.page == page_id or (
-                page_id == "customers" and st.session_state.page == "customer_detail"
-            )
-            if st.button(label, key=f"nav_{page_id}",
-                         use_container_width=True,
-                         type="primary" if is_active else "secondary"):
-                st.session_state.page = page_id
-                if page_id != "customer_detail":
-                    st.session_state.pop('viewing_lead_id', None)
-                if page_id != "send_message":
-                    st.session_state.pop('message_lead_id', None)
-                    st.session_state.pop('draft', None)
-                st.rerun()
+    # Same container pattern — mobile CSS :has() selects this row for its own
+    # 2-col grid layout instead of the global force-stack rule.
+    with st.container():
+        st.markdown('<div class="aqp-navrow-marker"></div>',
+                     unsafe_allow_html=True)
+        cols = st.columns(len(nav_items))
+        for col, (label, page_id) in zip(cols, nav_items):
+            with col:
+                is_active = st.session_state.page == page_id or (
+                    page_id == "customers" and st.session_state.page == "customer_detail"
+                )
+                if st.button(label, key=f"nav_{page_id}",
+                             use_container_width=True,
+                             type="primary" if is_active else "secondary"):
+                    st.session_state.page = page_id
+                    if page_id != "customer_detail":
+                        st.session_state.pop('viewing_lead_id', None)
+                    if page_id != "send_message":
+                        st.session_state.pop('message_lead_id', None)
+                        st.session_state.pop('draft', None)
+                    st.rerun()
     st.markdown("---")
 
 
