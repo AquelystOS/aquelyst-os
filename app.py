@@ -288,6 +288,16 @@ st.markdown("""
        White card containers (expander/form/metric) get an OVERRIDE back
        to DARK text below — higher specificity wins, fixing white-on-white. */
 
+    /* Button text inherits from the button itself — protects nav button
+       labels (Setup, Operations, etc.) from the page-bg text-color rule
+       below. Secondary buttons stay dark on white; primary buttons stay
+       white on gradient. */
+    .stButton button [data-testid="stMarkdownContainer"],
+    .stButton button [data-testid="stMarkdownContainer"] p,
+    .stButton button p {
+        color: inherit !important;
+    }
+
     /* DEFAULT — light text on dark page bg */
     .stApp [data-testid="stMarkdownContainer"] {
         color: #cbd5e1;
