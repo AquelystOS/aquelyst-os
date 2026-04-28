@@ -575,25 +575,138 @@ st.markdown("""
     }
 
     /* ==================== STATUS BANNERS ==================== */
+    /* Backgrounds are translucent on the dark page bg, so text must be light
+       (not Streamlit's default dark) for legibility. Each banner gets a
+       brand-aligned light shade matching its semantic color. */
     .stSuccess {
-        background: linear-gradient(135deg, rgba(34,197,94,0.10), rgba(34,197,94,0.04)) !important;
-        border: 1px solid rgba(34,197,94,0.30) !important;
+        background: linear-gradient(135deg, rgba(16,185,129,0.14), rgba(16,185,129,0.05)) !important;
+        border: 1px solid rgba(16,185,129,0.40) !important;
         border-radius: 10px !important;
+    }
+    .stSuccess, .stSuccess *, .stSuccess [data-testid="stMarkdownContainer"] * {
+        color: #86efac !important;
     }
     .stError {
-        background: linear-gradient(135deg, rgba(239,68,68,0.10), rgba(239,68,68,0.04)) !important;
-        border: 1px solid rgba(239,68,68,0.30) !important;
+        background: linear-gradient(135deg, rgba(239,68,68,0.14), rgba(239,68,68,0.05)) !important;
+        border: 1px solid rgba(239,68,68,0.40) !important;
         border-radius: 10px !important;
+    }
+    .stError, .stError *, .stError [data-testid="stMarkdownContainer"] * {
+        color: #fca5a5 !important;
     }
     .stWarning {
-        background: linear-gradient(135deg, rgba(245,158,11,0.10), rgba(245,158,11,0.04)) !important;
-        border: 1px solid rgba(245,158,11,0.30) !important;
+        background: linear-gradient(135deg, rgba(245,158,11,0.14), rgba(245,158,11,0.05)) !important;
+        border: 1px solid rgba(245,158,11,0.40) !important;
         border-radius: 10px !important;
     }
+    .stWarning, .stWarning *, .stWarning [data-testid="stMarkdownContainer"] * {
+        color: #fcd34d !important;
+    }
     .stInfo {
-        background: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(6,182,212,0.04)) !important;
-        border: 1px solid rgba(6,182,212,0.30) !important;
+        background: linear-gradient(135deg, rgba(6,182,212,0.14), rgba(6,182,212,0.05)) !important;
+        border: 1px solid rgba(6,182,212,0.40) !important;
         border-radius: 10px !important;
+    }
+    .stInfo, .stInfo *, .stInfo [data-testid="stMarkdownContainer"] * {
+        color: #67e8f9 !important;
+    }
+    /* Bold inside banners stays in its semantic color (whiter) */
+    .stSuccess strong, .stSuccess b { color: #bbf7d0 !important; }
+    .stError strong, .stError b     { color: #fecaca !important; }
+    .stWarning strong, .stWarning b { color: #fde68a !important; }
+    .stInfo strong, .stInfo b       { color: #a5f3fc !important; }
+
+    /* ==================== ADDITIONAL LEGIBILITY ==================== */
+    /* Code blocks rendered on the dark page bg get their own surface
+       (slightly lighter than bg) and bright mono text */
+    .stApp [data-testid="stCodeBlock"],
+    .stApp pre {
+        background: rgba(15,23,42,0.85) !important;
+        border: 1px solid rgba(148,163,184,0.15) !important;
+        border-radius: 8px !important;
+    }
+    .stApp [data-testid="stCodeBlock"] code,
+    .stApp [data-testid="stCodeBlock"] *,
+    .stApp pre, .stApp pre code {
+        color: #e2e8f0 !important;
+    }
+    /* Inline code (single backticks) on dark bg */
+    .stApp [data-testid="stMarkdownContainer"] code {
+        background: rgba(6,182,212,0.12) !important;
+        color: #a3e635 !important;
+        padding: 0.1rem 0.4rem !important;
+        border-radius: 4px !important;
+    }
+    /* But code inside white-card containers stays light bg + dark text */
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] code,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] code {
+        background: rgba(15,23,42,0.06) !important;
+        color: #4d7c0f !important;
+    }
+
+    /* Slider value display (the number above the thumb) */
+    [data-testid="stSlider"] [data-testid="stWidgetLabel"],
+    [data-testid="stSlider"] label {
+        color: #e2e8f0 !important;
+    }
+    [data-testid="stSlider"] div[data-baseweb="tooltip"],
+    [data-testid="stSlider"] [role="slider"] + div {
+        color: #0a0f1c !important;  /* numbers in tooltips on light bg */
+    }
+
+    /* Selectbox dropdown menu — readable items */
+    div[role="listbox"] {
+        background: #ffffff !important;
+        color: #0a0f1c !important;
+    }
+    div[role="listbox"] [role="option"] {
+        color: #0a0f1c !important;
+    }
+    div[role="listbox"] [role="option"]:hover,
+    div[role="listbox"] [role="option"][aria-selected="true"] {
+        background: rgba(6,182,212,0.12) !important;
+        color: #0a0f1c !important;
+    }
+
+    /* Dataframe cells */
+    [data-testid="stDataFrame"] {
+        background: #ffffff !important;
+    }
+    [data-testid="stDataFrame"] * {
+        color: #0a0f1c !important;
+    }
+
+    /* Number input increment/decrement buttons + value */
+    [data-testid="stNumberInput"] input { color: #0a0f1c !important; }
+
+    /* Toast notifications on dark bg need light text */
+    [data-testid="stToast"] {
+        background: rgba(15,23,42,0.92) !important;
+        border: 1px solid rgba(6,182,212,0.30) !important;
+        color: #e2e8f0 !important;
+    }
+    [data-testid="stToast"] * { color: #e2e8f0 !important; }
+
+    /* Help icon tooltips ("?" hover) — light text on dark popup */
+    [data-baseweb="tooltip"] {
+        background: rgba(15,23,42,0.95) !important;
+        color: #e2e8f0 !important;
+        border: 1px solid rgba(148,163,184,0.20) !important;
+    }
+    [data-baseweb="tooltip"] * { color: #e2e8f0 !important; }
+
+    /* st.divider and st.markdown("---") — subtle on dark */
+    hr {
+        border-color: rgba(148,163,184,0.15) !important;
+        margin: 1rem 0 !important;
+    }
+
+    /* Links on dark page bg */
+    .stApp a:not([data-testid="stExpander"] a):not([data-testid="stForm"] a) {
+        color: #06b6d4 !important;
+    }
+    .stApp a:hover {
+        color: #a3e635 !important;
     }
 
     /* ==================== HIDE STREAMLIT CHROME ==================== */
@@ -1052,7 +1165,14 @@ def show_admin_console():
 
 
 def _admin_database_section():
-    """Show backend status (SQLite vs Postgres) and migration instructions."""
+    """Show backend status (SQLite vs Postgres) and migration instructions.
+    Root admin only — raw SQL exposure could leak SMTP credentials and other
+    private user data."""
+    if not is_root_admin():
+        st.warning("🔒 The Database tab can expose private user data "
+                    "(SMTP credentials, personal keys). Only the root admin "
+                    "can access it.")
+        return
     import db_backend
     st.markdown("##### Database backend")
 
@@ -7816,6 +7936,58 @@ def setup_ai_tab():
     current = _team.get_current_user()
     me_email = (current.get('email') or '').lower()
     me_first = (current.get('name') or 'You').split()[0]
+
+    # ============================================================
+    # SHARED-BASELINE SUMMARY — tells the user what's already wired up
+    # at the team level so they know whether they need to do anything.
+    # ============================================================
+    baseline_connected = []
+    for prov_meta in api_keys.PROVIDER_CATALOG:
+        pid = prov_meta['id']
+        if api_keys.has_key(pid):
+            baseline_connected.append(prov_meta['name'])
+
+    if baseline_connected:
+        chips_html = ''.join(
+            f"<span style='display:inline-block;background:rgba(6,182,212,0.15);"
+            f"color:#a3e635;border:1px solid rgba(163,230,53,0.35);"
+            f"padding:0.18rem 0.6rem;border-radius:999px;"
+            f"font-family:JetBrains Mono,monospace;font-size:0.66rem;"
+            f"font-weight:700;letter-spacing:0.08em;text-transform:uppercase;"
+            f"margin:0 0.3rem 0.3rem 0'>{name}</span>"
+            for name in baseline_connected
+        )
+        st.html(
+            "<div style='background:linear-gradient(135deg,rgba(16,185,129,0.10),"
+            "rgba(6,182,212,0.06));border:1px solid rgba(163,230,53,0.30);"
+            "border-radius:14px;padding:1.0rem 1.3rem;margin-bottom:1rem'>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+            "color:#a3e635;letter-spacing:0.16em;text-transform:uppercase;"
+            "font-weight:700;margin-bottom:0.4rem'>◢ AQUA IS READY</div>"
+            f"<div style='font-size:1.05rem;font-weight:700;color:#e2e8f0;"
+            f"line-height:1.3;margin-bottom:0.55rem'>"
+            f"You don't need to configure anything to start using Aqua. "
+            f"The team has {len(baseline_connected)} provider"
+            f"{'s' if len(baseline_connected) != 1 else ''} pre-connected.</div>"
+            f"<div style='margin-bottom:0.5rem'>{chips_html}</div>"
+            "<div style='color:#94a3b8;font-size:0.85rem;line-height:1.4'>"
+            "Adding your own personal key below is OPTIONAL — it pools with the "
+            "team for faster, more reliable responses when traffic is heavy."
+            "</div></div>"
+        )
+    else:
+        st.html(
+            "<div style='background:linear-gradient(135deg,rgba(245,158,11,0.10),"
+            "rgba(245,158,11,0.04));border:1px solid rgba(245,158,11,0.30);"
+            "border-radius:14px;padding:1.0rem 1.3rem;margin-bottom:1rem'>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+            "color:#f59e0b;letter-spacing:0.16em;text-transform:uppercase;"
+            "font-weight:700;margin-bottom:0.4rem'>◢ AQUA NEEDS A KEY</div>"
+            "<div style='font-size:1.05rem;font-weight:700;color:#e2e8f0;"
+            "line-height:1.3'>"
+            "No shared providers configured yet. Add Cerebras (free, 3 min) "
+            "below to get Aqua running for the team.</div></div>"
+        )
 
     # ============================================================
     # SECTION A — Your Personal Cerebras Key (the new guided flow)
