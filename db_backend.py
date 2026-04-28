@@ -239,10 +239,71 @@ class _PgConnection:
 # ============================================================================
 # Public API
 # ============================================================================
+# ----------------------------------------------------------------------------
+# Connection pool for Postgres — reuses a small bank of connections instead of
+# doing a full TCP+TLS+auth handshake on every query. Cuts page latency 5-10x
+# on remote Postgres (Supabase, Neon, etc.).
+# ----------------------------------------------------------------------------
+_pg_pool = None
+
+
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    db_url = _get_database_url()
+    if not db_url:
+        return None
+    try:
+        from psycopg2.pool import ThreadedConnectionPool
+        from psycopg2.extras import RealDictCursor
+        _pg_pool = ThreadedConnectionPool(
+            minconn=1, maxconn=10,
+            dsn=db_url,
+            cursor_factory=RealDictCursor,
+        )
+        return _pg_pool
+    except Exception:
+        return None
+
+
+class _PooledPgConnection(_PgConnection):
+    """Variant of _PgConnection whose close() returns the underlying connection
+    to the shared pool instead of closing it."""
+    def __init__(self, raw_conn, pool):
+        # Skip parent __init__ — we already have a live connection
+        self._conn = raw_conn
+        self._pool = pool
+
+    def close(self):
+        try:
+            # Reset state in case caller left things dirty
+            self._conn.rollback()
+        except Exception:
+            pass
+        try:
+            self._pool.putconn(self._conn)
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+
 def get_connection():
-    """Return a db connection. SQLite if no DATABASE_URL, Postgres otherwise."""
+    """Return a db connection. SQLite if no DATABASE_URL, Postgres (pooled) otherwise."""
     db_url = _get_database_url()
     if db_url:
+        pool = _get_pg_pool()
+        if pool:
+            try:
+                raw = pool.getconn()
+                # Match the autocommit semantics of the non-pooled path
+                raw.autocommit = True
+                return _PooledPgConnection(raw, pool)
+            except Exception:
+                # Fallback: open a one-off connection
+                pass
         return _PgConnection(db_url)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
