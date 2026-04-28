@@ -156,6 +156,8 @@ class _PgCursor:
             try:
                 self._cursor.connection.rollback()
             except Exception:
+                # If rollback itself failed, the connection is in a bad state.
+                # Caller's close() will evict it from the pool.
                 pass
             raise
         return self
@@ -248,6 +250,8 @@ _pg_pool = None
 
 
 def _get_pg_pool():
+    """Lazy-init a small connection pool. Sized conservatively to stay well
+    under Supabase free-tier limits (~60 concurrent connections)."""
     global _pg_pool
     if _pg_pool is not None:
         return _pg_pool
@@ -257,10 +261,13 @@ def _get_pg_pool():
     try:
         from psycopg2.pool import ThreadedConnectionPool
         from psycopg2.extras import RealDictCursor
+        # Streamlit Cloud + Supabase free tier: keep pool small to leave headroom
+        # for background threads (watcher, auto-engagement, autopilot)
         _pg_pool = ThreadedConnectionPool(
-            minconn=1, maxconn=10,
+            minconn=1, maxconn=5,
             dsn=db_url,
             cursor_factory=RealDictCursor,
+            connect_timeout=10,
         )
         return _pg_pool
     except Exception:
@@ -274,15 +281,23 @@ class _PooledPgConnection(_PgConnection):
         # Skip parent __init__ — we already have a live connection
         self._conn = raw_conn
         self._pool = pool
+        self._poisoned = False
+
+    def rollback(self):
+        try:
+            self._conn.rollback()
+        except Exception:
+            self._poisoned = True
 
     def close(self):
         try:
-            # Reset state in case caller left things dirty
             self._conn.rollback()
         except Exception:
-            pass
+            self._poisoned = True
         try:
-            self._pool.putconn(self._conn)
+            # If the connection is dead, return it to the pool with close=True
+            # so psycopg2 evicts it instead of leaking a dead handle
+            self._pool.putconn(self._conn, close=self._poisoned)
         except Exception:
             try:
                 self._conn.close()
@@ -290,24 +305,56 @@ class _PooledPgConnection(_PgConnection):
                 pass
 
 
+def _reset_pool():
+    """Drop the cached pool. Next get_connection() will rebuild it."""
+    global _pg_pool
+    if _pg_pool is not None:
+        try:
+            _pg_pool.closeall()
+        except Exception:
+            pass
+        _pg_pool = None
+
+
 def get_connection():
-    """Return a db connection. SQLite if no DATABASE_URL, Postgres (pooled) otherwise."""
+    """Return a db connection. SQLite if no DATABASE_URL, Postgres (pooled) otherwise.
+
+    Retries once on OperationalError — Postgres connections die during deploys,
+    container sleeps, network blips, or when Supabase rotates pooler nodes."""
     db_url = _get_database_url()
-    if db_url:
+    if not db_url:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    import time as _time
+    last_err = None
+    for attempt in range(3):
         pool = _get_pg_pool()
         if pool:
             try:
                 raw = pool.getconn()
-                # Match the autocommit semantics of the non-pooled path
+                # If the pooled connection is dead (closed by server), this raises
                 raw.autocommit = True
+                # Smoke-test it cheaply before returning
+                with raw.cursor() as _c:
+                    _c.execute("SELECT 1")
                 return _PooledPgConnection(raw, pool)
-            except Exception:
-                # Fallback: open a one-off connection
-                pass
-        return _PgConnection(db_url)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+            except Exception as e:
+                last_err = e
+                # Drop and rebuild the pool — the underlying connections are stale
+                _reset_pool()
+                _time.sleep(0.4 * (attempt + 1))
+                continue
+        # Pool init itself failed — try a one-off direct connection
+        try:
+            return _PgConnection(db_url)
+        except Exception as e:
+            last_err = e
+            _time.sleep(0.4 * (attempt + 1))
+            continue
+
+    raise last_err or RuntimeError("Could not connect to Postgres after 3 attempts")
 
 
 # ---------------------------------------------------------------------------
