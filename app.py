@@ -2043,62 +2043,128 @@ def onboard_done():
 def show_home():
     hour = datetime.now().hour
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
-    today = datetime.now().strftime("%A, %B %d")
+    today_short = datetime.now().strftime("%a · %d %b %Y").upper()
+    now_time = datetime.now().strftime("%H:%M")
 
     stats = database.get_dashboard_stats()
     ap_state = autopilot.get_state()
     ap_running = ap_state.get('running', False)
 
-    # ========== HERO (clean modern style) ==========
-    pipeline_msg = (
-        f"<strong style='color:#dc2626'>{stats['hot_leads']} hot leads</strong> waiting for outreach"
-        if stats['hot_leads'] > 0
-        else "All caught up — time to find more leads"
+    # Personalize greeting with the logged-in user's first name
+    user_first = "team"
+    try:
+        u = team.get_current_user()
+        if u and u.get('name'):
+            user_first = u['name'].split()[0]
+    except Exception:
+        pass
+
+    # ========== FUTURISTIC HERO (dark glass, cyan accents) ==========
+    if stats['hot_leads'] > 0:
+        pulse_color = '#ef4444'
+        pipeline_text = (
+            f"<strong style='color:#fb923c'>{stats['hot_leads']} hot</strong> "
+            f"need{'s' if stats['hot_leads']==1 else ''} outreach"
+        )
+    elif stats['follow_ups_due'] > 0:
+        pulse_color = '#f59e0b'
+        s = '' if stats['follow_ups_due'] == 1 else 's'
+        pipeline_text = (
+            f"<strong style='color:#f59e0b'>{stats['follow_ups_due']} "
+            f"follow-up{s}</strong> due"
+        )
+    else:
+        pulse_color = '#10b981'
+        pipeline_text = "pipeline caught up · time to hunt"
+
+    ap_status = (
+        '<span style="color:#10b981">● live</span>' if ap_running
+        else '<span style="color:#64748b">○ idle</span>'
     )
+
     st.markdown(f"""
-    <div style='margin-bottom:2rem'>
-        <div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;
-                    letter-spacing:0.08em;font-weight:600;margin-bottom:0.25rem'>
-            {today}
+    <style>
+        @keyframes aqp-pulse {{
+            0%,100% {{ opacity: 1; transform: scale(1); }}
+            50% {{ opacity: 0.45; transform: scale(0.92); }}
+        }}
+    </style>
+    <div style='position:relative;
+                background:linear-gradient(135deg,#0a0f1c 0%,#0f172a 55%,#0a1f24 100%);
+                border-radius:18px;padding:1.7rem 2.1rem;margin-bottom:1.5rem;
+                border:1px solid rgba(6,182,212,0.20);
+                box-shadow:0 10px 30px rgba(6,182,212,0.07),
+                            inset 0 1px 0 rgba(255,255,255,0.04);
+                overflow:hidden'>
+        <div style='position:absolute;inset:0;pointer-events:none;
+                    background-image:
+                        radial-gradient(circle at 12% 0%, rgba(6,182,212,0.10) 0%, transparent 38%),
+                        radial-gradient(circle at 100% 100%, rgba(26,95,63,0.10) 0%, transparent 42%),
+                        linear-gradient(rgba(6,182,212,0.04) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(6,182,212,0.04) 1px, transparent 1px);
+                    background-size: auto, auto, 32px 32px, 32px 32px'></div>
+        <div style='position:relative;display:flex;justify-content:space-between;
+                    align-items:center;font-family:JetBrains Mono,monospace;
+                    font-size:0.66rem;letter-spacing:0.22em;color:#64748b;
+                    text-transform:uppercase;margin-bottom:1.4rem;font-weight:700'>
+            <span>◢ AQUELYST OS · TODAY</span>
+            <span>{today_short} · {now_time}</span>
         </div>
-        <div style='display:flex;justify-content:space-between;align-items:end;
-                    flex-wrap:wrap;gap:1rem'>
+        <div style='position:relative;display:flex;justify-content:space-between;
+                    align-items:flex-end;flex-wrap:wrap;gap:1.6rem'>
             <div>
-                <div style='font-size:2.2rem;font-weight:700;color:#0f172a;
-                            letter-spacing:-0.025em;line-height:1.1'>
-                    {greeting}
+                <div style='font-size:2.4rem;font-weight:700;color:#e2e8f0;
+                            letter-spacing:-0.02em;line-height:1.05'>
+                    {greeting}, <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);
+                                              -webkit-background-clip:text;
+                                              -webkit-text-fill-color:transparent;
+                                              background-clip:text'>{user_first}</span>.
                 </div>
-                <div style='color:#475569;margin-top:0.4rem;font-size:1rem'>
-                    {pipeline_msg}
+                <div style='color:#94a3b8;margin-top:0.55rem;font-size:0.95rem;
+                            display:flex;align-items:center;gap:0.55rem'>
+                    <span style='display:inline-block;width:9px;height:9px;border-radius:50%;
+                                 background:{pulse_color};
+                                 box-shadow:0 0 14px {pulse_color};
+                                 animation:aqp-pulse 2s infinite'></span>
+                    {pipeline_text}
+                </div>
+                <div style='color:#475569;margin-top:0.45rem;font-size:0.74rem;
+                            font-family:JetBrains Mono,monospace;letter-spacing:0.06em'>
+                    autopilot {ap_status}
                 </div>
             </div>
-            <div style='display:flex;gap:1.5rem;align-items:center'>
-                <div style='text-align:right'>
-                    <div style='font-size:1.5rem;font-weight:700;color:#0f172a'>
+            <div style='display:flex;gap:1.1rem;align-items:center'>
+                <div style='text-align:right;padding:0 0.3rem'>
+                    <div style='font-family:JetBrains Mono,monospace;font-size:1.7rem;
+                                font-weight:700;color:#e2e8f0;line-height:1'>
                         {stats['total_leads']}
                     </div>
-                    <div style='font-size:0.75rem;color:#64748b;text-transform:uppercase;
-                                letter-spacing:0.05em;font-weight:600'>
+                    <div style='font-size:0.62rem;color:#64748b;text-transform:uppercase;
+                                letter-spacing:0.10em;font-weight:600;margin-top:0.3rem'>
                         Total leads
                     </div>
                 </div>
-                <div style='width:1px;height:36px;background:#e2e8f0'></div>
-                <div style='text-align:right'>
-                    <div style='font-size:1.5rem;font-weight:700;color:#0f172a'>
+                <div style='width:1px;height:38px;background:linear-gradient(180deg,
+                            transparent,#06b6d4,transparent)'></div>
+                <div style='text-align:right;padding:0 0.3rem'>
+                    <div style='font-family:JetBrains Mono,monospace;font-size:1.7rem;
+                                font-weight:700;color:#10b981;line-height:1'>
                         {stats['closed_won']}
                     </div>
-                    <div style='font-size:0.75rem;color:#64748b;text-transform:uppercase;
-                                letter-spacing:0.05em;font-weight:600'>
+                    <div style='font-size:0.62rem;color:#64748b;text-transform:uppercase;
+                                letter-spacing:0.10em;font-weight:600;margin-top:0.3rem'>
                         Closed
                     </div>
                 </div>
-                <div style='width:1px;height:36px;background:#e2e8f0'></div>
-                <div style='text-align:right'>
-                    <div style='font-size:1.5rem;font-weight:700;color:#0f172a'>
+                <div style='width:1px;height:38px;background:linear-gradient(180deg,
+                            transparent,#06b6d4,transparent)'></div>
+                <div style='text-align:right;padding:0 0.3rem'>
+                    <div style='font-family:JetBrains Mono,monospace;font-size:1.7rem;
+                                font-weight:700;color:#06b6d4;line-height:1'>
                         {stats['conversion_rate']}%
                     </div>
-                    <div style='font-size:0.75rem;color:#64748b;text-transform:uppercase;
-                                letter-spacing:0.05em;font-weight:600'>
+                    <div style='font-size:0.62rem;color:#64748b;text-transform:uppercase;
+                                letter-spacing:0.10em;font-weight:600;margin-top:0.3rem'>
                         Win rate
                     </div>
                 </div>
@@ -2167,21 +2233,37 @@ def show_home():
     if next_action_lead:
         lead = next_action_lead
         score = lead['lead_score'] or 0
+        location = (
+            f"{lead['city']}, {lead['state']}"
+            if lead['city'] and lead['state']
+            else lead['city'] or lead['state'] or 'Location unknown'
+        )
         st.markdown(f"""
-        <div style='background:linear-gradient(135deg,#fff5f5 0%,#ffe5e5 100%);
-                    border:2px solid #fecaca;border-radius:14px;padding:1.5rem 2rem;
-                    margin-bottom:1.5rem'>
-            <div style='font-size:0.8rem;color:#dc2626;text-transform:uppercase;
-                        letter-spacing:0.1em;font-weight:700'>
-                {next_action_label}
+        <div style='position:relative;
+                    background:linear-gradient(135deg,
+                        rgba(6,182,212,0.07) 0%,
+                        rgba(15,23,42,0.02) 100%);
+                    border:1px solid rgba(6,182,212,0.30);
+                    border-radius:14px;padding:1.4rem 1.8rem;
+                    margin-bottom:1.2rem;
+                    box-shadow:0 4px 24px rgba(6,182,212,0.08)'>
+            <div style='font-size:0.68rem;color:#06b6d4;text-transform:uppercase;
+                        letter-spacing:0.18em;font-weight:700;
+                        font-family:JetBrains Mono,monospace;
+                        display:flex;align-items:center;gap:0.5rem;margin-bottom:0.6rem'>
+                <span style='display:inline-block;width:6px;height:6px;border-radius:50%;
+                             background:#06b6d4;box-shadow:0 0 10px #06b6d4;
+                             animation:aqp-pulse 2s infinite'></span>
+                ◢ {next_action_label}
             </div>
-            <h2 style='margin:0.4rem 0 0.2rem;color:#1a5f3f !important'>
+            <h2 style='margin:0 0 0.3rem;color:#0f172a !important;
+                       font-size:1.55rem;font-weight:700;letter-spacing:-0.01em'>
                 {lead['business_name']}
             </h2>
-            <div style='color:#6b7280;font-size:0.95rem'>
-                {lead['contact_name'] or 'No contact name'} ·
-                {(lead['city'] or '') + ', ' + (lead['state'] or '') if lead['city'] else 'Location unknown'} ·
-                Match score <strong style='color:#dc2626'>{score}/100</strong>
+            <div style='color:#475569;font-size:0.92rem'>
+                {lead['contact_name'] or 'No contact name'} · {location} ·
+                Match score
+                <strong style='color:#0f172a;font-family:JetBrains Mono,monospace'>{score}/100</strong>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -2200,12 +2282,23 @@ def show_home():
             st.rerun()
     else:
         st.markdown(f"""
-        <div style='background:linear-gradient(135deg,#f0f9f4 0%,#dcfce7 100%);
-                    border:2px solid #86efac;border-radius:14px;padding:1.5rem 2rem;
-                    text-align:center;margin-bottom:1.5rem'>
-            <div style='font-size:2rem'>🎉</div>
-            <h3 style='color:#166534 !important;margin:0.5rem 0'>You're caught up!</h3>
-            <div style='color:#15803d'>No urgent tasks. Time to find more leads or work the pipeline.</div>
+        <div style='position:relative;
+                    background:linear-gradient(135deg,
+                        rgba(16,185,129,0.07) 0%,
+                        rgba(15,23,42,0.02) 100%);
+                    border:1px solid rgba(16,185,129,0.32);
+                    border-radius:14px;padding:1.4rem 1.8rem;
+                    text-align:center;margin-bottom:1.2rem'>
+            <div style='font-size:0.68rem;color:#10b981;text-transform:uppercase;
+                        letter-spacing:0.18em;font-weight:700;
+                        font-family:JetBrains Mono,monospace;margin-bottom:0.5rem'>
+                ◢ ALL CLEAR
+            </div>
+            <h3 style='color:#0f172a !important;margin:0.2rem 0;
+                       font-weight:700;letter-spacing:-0.01em'>You're caught up.</h3>
+            <div style='color:#475569;font-size:0.92rem'>
+                No urgent tasks — find more leads or work the pipeline.
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2217,18 +2310,36 @@ def show_home():
             st.session_state.page = "customers"
             st.rerun()
 
-    st.markdown("---")
+    # Section divider — futuristic cyan accent
+    st.markdown("""
+    <div style='display:flex;align-items:center;gap:0.8rem;margin:1.6rem 0 0.6rem'>
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;
+                    letter-spacing:0.20em;color:#475569;text-transform:uppercase;
+                    font-weight:700'>◢ Pipeline Telemetry</div>
+        <div style='flex:1;height:1px;background:linear-gradient(90deg,
+                    rgba(6,182,212,0.35) 0%,rgba(6,182,212,0) 100%)'></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ========== DASHBOARD VISUALIZATIONS ==========
     _today_dashboard_charts()
 
-    st.markdown("---")
+    # Section divider
+    st.markdown("""
+    <div style='display:flex;align-items:center;gap:0.8rem;margin:1.6rem 0 0.6rem'>
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;
+                    letter-spacing:0.20em;color:#475569;text-transform:uppercase;
+                    font-weight:700'>◢ Live Intelligence</div>
+        <div style='flex:1;height:1px;background:linear-gradient(90deg,
+                    rgba(6,182,212,0.35) 0%,rgba(6,182,212,0) 100%)'></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ========== TOP LEADS GALLERY + ACTIVITY ==========
     col_left, col_right = st.columns([3, 2])
 
     with col_left:
-        st.markdown("### 🔥 Top hot leads")
+        st.markdown("##### 🔥 Top hot leads")
         hot_leads = database.get_hot_leads()[:5]
         if hot_leads:
             for l in hot_leads:
@@ -2547,32 +2658,45 @@ def _today_dashboard_charts():
 
 @st.fragment(run_every=30)
 def _home_kpi_fragment():
-    """Auto-refreshing KPI cards on the Home page — CLICKABLE to drill into the underlying records."""
+    """Auto-refreshing KPI rings on the Home page — clickable to drill into records.
+    Ring arc length = value / max-across-row, color identifies the metric, glow
+    matches the ring color so the eye instantly knows where the volume is."""
     stats = database.get_dashboard_stats()
-    # Each KPI: (icon, label, value, sublabel, color, click_action)
+    # (label, value, color, click_action)
     kpi_data = [
-        ('🔥', 'Hot Leads', stats['hot_leads'], 'score 70+', '#dc3545', 'hot'),
-        ('📅', 'Due Today', stats['follow_ups_due'], 'follow-ups', '#fd7e14', 'due'),
-        ('⭐', 'Interested', stats['interested'], 'engaged', '#ffc107', 'interested'),
-        ('🎁', 'Trials Out', stats['trial_offered'], 'in progress', '#20c997', 'trial_offered'),
-        ('✅', 'Won', stats['closed_won'], 'closed deals', '#28a745', 'closed_won'),
+        ('HOT', stats['hot_leads'], '#ef4444', 'hot'),
+        ('DUE', stats['follow_ups_due'], '#fb923c', 'due'),
+        ('INTERESTED', stats['interested'], '#f59e0b', 'interested'),
+        ('TRIAL', stats['trial_offered'], '#06b6d4', 'trial_offered'),
+        ('WON', stats['closed_won'], '#10b981', 'closed_won'),
     ]
+    max_val = max((v for _, v, _, _ in kpi_data), default=0) or 1
+
     cols = st.columns(5)
-    for col, (icon, label, value, sublabel, color, click_action) in zip(cols, kpi_data):
+    for col, (label, value, color, click_action) in zip(cols, kpi_data):
+        pct = round(100 * value / max_val) if max_val else 0
         with col:
-            # Render the visual card
             st.html(
-                f"<div style='background:#fff;border:1px solid #e9ecef;border-radius:12px;"
-                f"padding:1rem 0.5rem 0.5rem;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.04)'>"
-                f"<div style='font-size:1.5rem'>{icon}</div>"
-                f"<div style='font-size:2rem;font-weight:800;color:{color};line-height:1.1;margin:0.4rem 0 0.2rem'>{value}</div>"
-                f"<div style='font-size:0.75rem;color:#1a5f3f;text-transform:uppercase;letter-spacing:0.05em;font-weight:600'>{label}</div>"
-                f"<div style='font-size:0.7rem;color:#9ca3af;margin-top:0.15rem'>{sublabel}</div>"
+                f"<div style='text-align:center;padding:0.45rem 0.2rem 0.2rem'>"
+                f"<div style='width:96px;height:96px;border-radius:50%;"
+                f"background:conic-gradient({color} 0% {pct}%, "
+                f"rgba(15,23,42,0.08) {pct}% 100%);"
+                f"display:flex;align-items:center;justify-content:center;"
+                f"margin:0 auto 0.7rem;"
+                f"box-shadow:0 0 0 1px rgba(15,23,42,0.06), 0 0 24px {color}33,"
+                f" inset 0 0 0 2px rgba(255,255,255,0.6)'>"
+                f"<div style='width:70px;height:70px;border-radius:50%;"
+                f"background:#ffffff;display:flex;flex-direction:column;"
+                f"align-items:center;justify-content:center;"
+                f"box-shadow:inset 0 1px 2px rgba(15,23,42,0.06)'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.7rem;"
+                f"font-weight:800;color:{color};line-height:1'>{value}</div>"
+                f"</div></div>"
+                f"<div style='font-size:0.7rem;color:#475569;text-transform:uppercase;"
+                f"letter-spacing:0.12em;font-weight:700'>{label}</div>"
                 f"</div>"
             )
-            # Click-through button below the card
-            if st.button(f"View {label.lower()} →",
-                          key=f"kpi_{click_action}_{value}",
+            if st.button("View →", key=f"kpi_{click_action}_{value}",
                           use_container_width=True):
                 st.session_state.customers_filter = click_action
                 st.session_state.page = "customers"
