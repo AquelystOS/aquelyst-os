@@ -867,18 +867,25 @@ def delete_bid_opportunity(opp_id):
 
 
 def bid_opportunities_stats():
+    """Summary stats for the Bid Opportunities tab."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) as n FROM bid_opportunities")
-    total = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE status = 'new'")
-    new = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE match_score >= 60")
-    hot = c.fetchone()[0]
-    c.execute("SELECT product_fit, COUNT(*) as n FROM bid_opportunities "
-               "GROUP BY product_fit ORDER BY n DESC")
-    by_product = [(r['product_fit'], r['n']) for r in c.fetchall()]
-    conn.close()
+    try:
+        c.execute("SELECT COUNT(*) as n FROM bid_opportunities")
+        total = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE status = 'new'")
+        new = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE match_score >= 60")
+        hot = c.fetchone()[0]
+        c.execute("SELECT product_fit, COUNT(*) as n FROM bid_opportunities "
+                   "GROUP BY product_fit ORDER BY n DESC")
+        by_product = [(r['product_fit'], r['n']) for r in c.fetchall()]
+    except Exception:
+        # Table may not exist yet on a fresh DB before init_db has run on PG
+        total = new = hot = 0
+        by_product = []
+    finally:
+        conn.close()
     return {'total': total, 'new': new, 'hot': hot, 'by_product': by_product}
 
 
