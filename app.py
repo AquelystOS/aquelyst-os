@@ -279,40 +279,83 @@ st.markdown("""
         pointer-events: none;
         z-index: 0;
     }
-    /* Inside white card components (expander, form, metric, container) keep
-       text DARK so it's readable on the white surface. Heroes, glass panels,
-       and ring cards use inline color styles to stay light on dark — those
-       win over these defaults. This is the fix for the hunt-categories
-       white-on-white bug introduced when we flipped to a dark theme. */
-    [data-testid="stExpander"],
-    [data-testid="stForm"],
-    [data-testid="stMetric"] {
-        color: var(--ink);
+    /* ==================== TEXT COLOR ON DARK PAGE BG ====================
+       Default for text rendered directly on the dark page background:
+       LIGHT. Heroes/glass cards already win via inline styles. Streamlit
+       widgets (st.markdown, st.caption, st.title/subheader, labels) need
+       this default override since the page bg is dark.
+
+       White card containers (expander/form/metric) get an OVERRIDE back
+       to DARK text below — higher specificity wins, fixing white-on-white. */
+
+    /* DEFAULT — light text on dark page bg */
+    .stApp [data-testid="stMarkdownContainer"] {
+        color: #cbd5e1;
     }
-    [data-testid="stExpander"] [data-testid="stCaptionContainer"],
-    [data-testid="stForm"] [data-testid="stCaptionContainer"],
-    [data-testid="stMetric"] [data-testid="stCaptionContainer"] {
-        color: var(--ink-soft) !important;
+    .stApp [data-testid="stCaptionContainer"] {
+        color: #94a3b8 !important;
         opacity: 1;
     }
-    [data-testid="stExpander"] [data-testid="stMarkdownContainer"],
-    [data-testid="stForm"] [data-testid="stMarkdownContainer"],
-    [data-testid="stMetric"] [data-testid="stMarkdownContainer"] {
-        color: var(--ink);
+    .stApp h1[data-testid="stHeading"],
+    .stApp h2[data-testid="stHeading"],
+    .stApp h3[data-testid="stHeading"] {
+        color: #e2e8f0 !important;
     }
+    .stApp [data-testid="stMarkdownContainer"] h1,
+    .stApp [data-testid="stMarkdownContainer"] h2,
+    .stApp [data-testid="stMarkdownContainer"] h3,
+    .stApp [data-testid="stMarkdownContainer"] h4,
+    .stApp [data-testid="stMarkdownContainer"] h5,
+    .stApp [data-testid="stMarkdownContainer"] h6 {
+        color: #e2e8f0;
+    }
+    .stApp [data-testid="stMarkdownContainer"] strong,
+    .stApp [data-testid="stMarkdownContainer"] b {
+        color: #e2e8f0;
+    }
+    /* Streamlit widget labels (text_input / selectbox / radio / checkbox /
+       slider) sit above the widget on the page bg — light. */
+    .stApp label,
+    .stApp [data-testid="stWidgetLabel"] {
+        color: #cbd5e1 !important;
+    }
+
+    /* OVERRIDE — DARK text inside white card containers */
+    [data-testid="stExpander"],
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"],
+    [data-testid="stExpander"] [data-testid="stCaptionContainer"],
+    [data-testid="stForm"],
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"],
+    [data-testid="stForm"] [data-testid="stCaptionContainer"],
+    [data-testid="stMetric"],
+    [data-testid="stMetric"] [data-testid="stMarkdownContainer"],
+    [data-testid="stMetric"] [data-testid="stCaptionContainer"] {
+        color: var(--ink) !important;
+        opacity: 1 !important;
+    }
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h2,
     [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h3,
     [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h4,
     [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] h2,
     [data-testid="stForm"] [data-testid="stMarkdownContainer"] h3,
     [data-testid="stForm"] [data-testid="stMarkdownContainer"] h4,
     [data-testid="stForm"] [data-testid="stMarkdownContainer"] h5 {
         color: var(--ink) !important;
     }
-    /* Form labels (text_input / selectbox / checkbox / radio) inside white
-       cards — keep them dark for legibility. */
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] strong,
+    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] b,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] strong,
+    [data-testid="stForm"] [data-testid="stMarkdownContainer"] b {
+        color: var(--ink) !important;
+    }
     [data-testid="stExpander"] label,
     [data-testid="stForm"] label,
-    [data-testid="stMetric"] label {
+    [data-testid="stMetric"] label,
+    [data-testid="stExpander"] [data-testid="stWidgetLabel"],
+    [data-testid="stForm"] [data-testid="stWidgetLabel"] {
         color: var(--ink-soft) !important;
     }
 
