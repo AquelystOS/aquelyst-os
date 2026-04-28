@@ -181,7 +181,28 @@ def get_member_by_name_or_alias(query):
 
 
 def add_member(name, email, role, bio='', aliases=None, company='AqueLyst'):
-    team = load_team()
+    """Add a person to the official roster (team_members.json).
+
+    Reads the persisted roster ONLY (not the synthesized self-registered
+    merge layer) so promoting a self-registered user doesn't accidentally
+    write the synthesized entry back to disk alongside the new one.
+
+    If the email already exists on the official roster, updates that
+    member's name/role/bio in place instead of appending a duplicate."""
+    email = (email or '').lower().strip()
+    if not email:
+        return False
+    team = load_team(include_self_registered=False)
+    for m in team:
+        if (m.get('email') or '').lower().strip() == email:
+            m['name'] = name or m.get('name')
+            m['role'] = role or m.get('role')
+            m['short_role'] = role or m.get('short_role')
+            m['bio'] = bio or m.get('bio')
+            m.pop('_self_registered', None)
+            m.pop('last_login', None)
+            m.pop('created_at', None)
+            return save_team(team)
     team.append({
         'name': name,
         'email': email,

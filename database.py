@@ -549,8 +549,12 @@ def admin_grant(user_email, granted_by):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute('''INSERT OR IGNORE INTO admin_users (user_email, granted_by)
-                     VALUES (?, ?)''',
+        # Use ON CONFLICT instead of INSERT OR IGNORE so it works on both
+        # Postgres and modern SQLite (3.24+). The previous INSERT OR IGNORE
+        # form crashed with "syntax error" on Postgres.
+        c.execute('''INSERT INTO admin_users (user_email, granted_by)
+                     VALUES (?, ?)
+                     ON CONFLICT(user_email) DO NOTHING''',
                   (user_email.lower(), (granted_by or '').lower()))
         conn.commit()
         ok = c.rowcount > 0
