@@ -729,8 +729,8 @@ def provider_log_ok(provider, model=None):
                    last_model = excluded.last_model,
                    last_err = NULL,
                    last_err_at = NULL,
-                   total_requests = COALESCE(total_requests, 0) + 1,
-                   ok_requests = COALESCE(ok_requests, 0) + 1,
+                   total_requests = COALESCE(provider_connection_log.total_requests, 0) + 1,
+                   ok_requests = COALESCE(provider_connection_log.ok_requests, 0) + 1,
                    updated_at = CURRENT_TIMESTAMP''',
               (provider, model))
     conn.commit()
@@ -748,8 +748,8 @@ def provider_log_err(provider, error_text):
                    last_err_at = CURRENT_TIMESTAMP,
                    last_err = excluded.last_err,
                    last_used_at = CURRENT_TIMESTAMP,
-                   total_requests = COALESCE(total_requests, 0) + 1,
-                   err_requests = COALESCE(err_requests, 0) + 1,
+                   total_requests = COALESCE(provider_connection_log.total_requests, 0) + 1,
+                   err_requests = COALESCE(provider_connection_log.err_requests, 0) + 1,
                    updated_at = CURRENT_TIMESTAMP''',
               (provider, (error_text or '')[:200]))
     conn.commit()
@@ -861,7 +861,7 @@ def mark_inbound_junk(msg_id, reason=None):
             c.execute('''INSERT INTO junk_signals (kind, value, source_msg_id, reason)
                          VALUES (?,?,?,?)
                          ON CONFLICT(kind, value)
-                         DO UPDATE SET match_count = COALESCE(match_count, 0) + 1''',
+                         DO UPDATE SET match_count = COALESCE(junk_signals.match_count, 0) + 1''',
                       (kind, value, msg_id, (reason or '')[:200]))
         except Exception:
             pass
