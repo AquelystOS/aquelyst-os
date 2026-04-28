@@ -1281,9 +1281,24 @@ def get_suppression_list():
     conn = get_connection()
     c = conn.cursor()
     c.execute('SELECT * FROM suppression_list ORDER BY added_at DESC')
-    results = c.fetchall()
+    results = [dict(r) for r in c.fetchall()]
     conn.close()
     return results
+
+
+def remove_from_suppression(email):
+    """Remove an email from the suppression list. Restores their lead status to 'new'."""
+    if not email:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM suppression_list WHERE LOWER(email) = LOWER(?)', (email,))
+    n = c.rowcount
+    # Also reset opt_out flag on any matching lead
+    c.execute("UPDATE leads SET opt_out = 0 WHERE LOWER(email) = LOWER(?)", (email,))
+    conn.commit()
+    conn.close()
+    return n > 0
 
 
 def bulk_update_status(lead_ids, new_status):

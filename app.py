@@ -4704,89 +4704,253 @@ def _show_pending_drafts(pending):
 
 
 def show_customers():
-    st.title("👥 My Customers")
+    """Customer hub — 6 tabs organized by how a sales team actually navigates leads."""
 
-    # Honor filter from Today-page KPI clicks
+    # Header bar
+    head_l, head_r = st.columns([5, 1])
+    head_l.html(
+        "<div>"
+        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;"
+        "letter-spacing:0.08em;font-weight:700'>👥 CUSTOMERS</div>"
+        "<div style='font-size:1.9rem;font-weight:800;color:#0a0f1c;line-height:1.1'>"
+        "Your team's CRM</div></div>"
+    )
+    if head_r.button("➕ Add", type="primary", use_container_width=True):
+        st.session_state.page = "add_customer"
+        st.rerun()
+
+    # ── Persistent filter bar ─────────────────────────────────────────────
+    # These filters apply across every tab below.
+    PRODUCT_OPTIONS = ['All', 'Duo Equine', 'Pets', 'SpillMaster', 'AMR',
+                       'HouseHold', 'Inversion Misting']
+    SOURCE_OPTIONS = ['All', 'autopilot', 'web_form', 'manual',
+                       'bid_intelligence', 'inbound', 'team_internal']
+
+    fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
+    search = fc1.text_input(
+        "Search", placeholder="🔍 business, contact, email, notes…",
+        label_visibility="collapsed", key="customers_search",
+    )
+    product_filter = fc2.selectbox("Product", PRODUCT_OPTIONS,
+                                    key="customers_product_filter")
+    source_filter = fc3.selectbox("Source", SOURCE_OPTIONS,
+                                   key="customers_source_filter")
+    min_score = fc4.slider("Min score", 0, 100, 0, 5,
+                            key="customers_min_score")
+
+    # Pre-filter from clicked-KPI flow (Today page deep-link)
     pre_filter = st.session_state.pop('customers_filter', None)
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search = st.text_input(
-            "Search",
-            placeholder="🔍 Type a business name or contact...",
-            label_visibility="collapsed"
-        )
-    with col2:
-        if st.button("➕ Add Customer", type="primary", use_container_width=True):
-            st.session_state.page = "add_customer"
-            st.rerun()
+    def _apply_filters(leads):
+        out = leads
+        if search and search.strip():
+            q = search.lower().strip()
+            out = [l for l in out if
+                   q in (l['business_name'] or '').lower() or
+                   q in (l['contact_name'] or '').lower() or
+                   q in (l['email'] or '').lower() or
+                   q in (l.get('notes') or '').lower()]
+        if product_filter != 'All':
+            out = [l for l in out if (l.get('product_fit') or '') == product_filter]
+        if source_filter != 'All':
+            out = [l for l in out if (l.get('lead_source') or '') == source_filter]
+        if min_score > 0:
+            out = [l for l in out if (l.get('lead_score') or 0) >= min_score]
+        return out
 
-    # Filter banner if user came from a clicked KPI card
-    if pre_filter:
-        filter_labels = {
-            'hot': '🔥 Hot leads (score ≥70)',
-            'due': '📅 Follow-ups due today',
-            'interested': '⭐ Interested',
-            'trial_offered': '🎁 Trial offered',
-            'closed_won': '✅ Closed/won',
-        }
-        st.html(
-            f"<div style='background:#eff6ff;border-left:4px solid #3b82f6;padding:0.6rem 1rem;border-radius:0 6px 6px 0;margin-bottom:0.8rem'>"
-            f"<strong style='color:#1e40af'>Filtered view:</strong> {filter_labels.get(pre_filter, pre_filter)}"
+    # Counts (after global filters applied)
+    all_leads = _apply_filters(database.get_all_leads())
+    hot = [l for l in all_leads if (l.get('lead_score') or 0) >= 70]
+    due = _apply_filters(database.get_follow_ups_due())
+    bids = [l for l in all_leads if (l.get('lead_source') or '') == 'bid_intelligence']
+
+    # Action queue = hot + due, deduped, sorted by score desc
+    seen = set()
+    action_queue = []
+    for batch in (hot, due):
+        for l in batch:
+            if l['id'] not in seen:
+                seen.add(l['id'])
+                action_queue.append(l)
+    action_queue.sort(key=lambda l: -(l.get('lead_score') or 0))
+
+    suppression = database.get_suppression_list()
+
+    # ── Tabs ────────────────────────────────────────────────────────────────
+    tab_action, tab_pipe, tab_prod, tab_bids, tab_all, tab_supp = st.tabs([
+        f"🔥 Action queue ({len(action_queue)})",
+        f"📊 Pipeline ({len(all_leads)})",
+        "🛒 By Product",
+        f"💰 Bids ({len(bids)})",
+        f"📋 All & Search ({len(all_leads)})",
+        f"🚫 Don't Contact ({len(suppression)})",
+    ])
+
+    with tab_action:
+        st.caption(
+            "Highest-priority leads to work right now — hot leads (score ≥ 70) "
+            "plus follow-ups that are due today, sorted by score."
+        )
+        if not action_queue:
+            st.info("🎉 Nothing urgent in the queue. Run Autopilot or check Pipeline.")
+        else:
+            show_customer_cards(action_queue,
+                                 "Nothing urgent.", key_prefix="action_q")
+
+    with tab_pipe:
+        _render_pipeline_view(all_leads)
+
+    with tab_prod:
+        _render_by_product_view(all_leads)
+
+    with tab_bids:
+        st.caption(
+            "Federal procurement leads — auto-imported from the Bids tab in Operations. "
+            "These have hard deadlines and a different sales motion (proposal-based, B2G)."
+        )
+        if not bids:
+            st.info(
+                "_No bid leads yet. Go to **🚀 Operations → 💰 Bids** → click "
+                "**📥 Add to CRM as lead** on opportunities you want to pursue._"
+            )
+        else:
+            show_customer_cards(bids, "_No bid leads._", key_prefix="bids")
+
+    with tab_all:
+        if pre_filter:
+            filter_labels = {
+                'hot': '🔥 Hot leads (score ≥70)',
+                'due': '📅 Follow-ups due today',
+                'interested': '⭐ Interested',
+                'trial_offered': '🎁 Trial offered',
+                'closed_won': '✅ Closed/won',
+            }
+            st.info(f"Pre-filter applied: **{filter_labels.get(pre_filter, pre_filter)}** "
+                     "(uncheck filters above to clear).")
+
+        st.markdown(f"### 📋 {len(all_leads)} customers match current filters")
+        show_customer_cards(all_leads, "No customers match these filters.",
+                             key_prefix="all_filtered")
+
+    with tab_supp:
+        st.caption("Emails on the Don't-Contact list. Aqua never reaches out to these.")
+        if not suppression:
+            st.info("_Empty — nobody has been suppressed._")
+        else:
+            for entry in suppression:
+                cc1, cc2, cc3 = st.columns([3, 2, 1])
+                cc1.markdown(f"`{entry['email']}`")
+                cc2.caption(f"Reason: {entry.get('reason') or '?'} · added {entry.get('added_at', '')[:10]}")
+                if cc3.button("Restore", key=f"unsupp_{entry['id']}"):
+                    database.remove_from_suppression(entry['email'])
+                    st.rerun()
+
+
+def _render_pipeline_view(leads):
+    """Stage-by-stage breakdown — like a kanban but vertical/expandable."""
+    STAGES = [
+        ('new', '🆕 New', '#94a3b8'),
+        ('researched', '🔍 Researched', '#06b6d4'),
+        ('drafted', '✍️ Drafted', '#0ea5e9'),
+        ('contacted', '📤 Contacted', '#1a5f3f'),
+        ('follow_up_due', '🔁 Follow-up due', '#f59e0b'),
+        ('interested', '⭐ Interested', '#16a34a'),
+        ('trial_offered', '🎁 Trial offered', '#a855f7'),
+        ('sample_sent', '📦 Sample sent', '#a855f7'),
+        ('closed_won', '✅ Closed won', '#16a34a'),
+        ('closed_lost', '❌ Closed lost', '#94a3b8'),
+        ('opted_out', '🚫 Opted out', '#94a3b8'),
+    ]
+
+    # Group leads by status
+    by_stage = {s[0]: [] for s in STAGES}
+    for l in leads:
+        s = l.get('status') or 'new'
+        if s in by_stage:
+            by_stage[s].append(l)
+
+    # Visual summary row
+    st.markdown("##### Pipeline at a glance")
+    pipe_cols = st.columns(len(STAGES))
+    for col, (stage_id, label, color) in zip(pipe_cols, STAGES):
+        n = len(by_stage[stage_id])
+        col.html(
+            f"<div style='background:{color};color:white;border-radius:8px;"
+            f"padding:0.5rem 0.4rem;text-align:center;height:64px;"
+            f"display:flex;flex-direction:column;justify-content:center'>"
+            f"<div style='font-size:1.2rem;font-weight:800'>{n}</div>"
+            f"<div style='font-size:0.65rem;opacity:0.95;line-height:1.1'>{label}</div>"
             f"</div>"
         )
 
-    # Determine which tab opens based on filter
-    if pre_filter in ('hot', 'interested', 'trial_offered', 'closed_won'):
-        # Show filtered single view
-        if pre_filter == 'hot':
-            leads = database.get_hot_leads()
-            label = '🔥 Hot leads'
+    st.markdown("---")
+    st.markdown("##### Drill into any stage")
+    for stage_id, label, _ in STAGES:
+        items = by_stage[stage_id]
+        if not items:
+            continue
+        with st.expander(f"{label} — {len(items)}", expanded=(len(items) <= 5)):
+            show_customer_cards(items, "_No leads in this stage._",
+                                 key_prefix=f"pipe_{stage_id}")
+
+
+def _render_by_product_view(leads):
+    """Group every lead under its product_fit, with sub-sections."""
+    PRODUCTS = [
+        ('Duo Equine', '🐴'),
+        ('Pets', '🐾'),
+        ('SpillMaster', '🧪'),
+        ('AMR', '🚗'),
+        ('HouseHold', '🏠'),
+        ('Inversion Misting', '💨'),
+    ]
+
+    by_product = {p[0]: [] for p in PRODUCTS}
+    unmatched = []
+    for l in leads:
+        p = (l.get('product_fit') or '').strip()
+        if p in by_product:
+            by_product[p].append(l)
         else:
-            leads = database.get_leads_by_status(pre_filter)
-            label = filter_labels.get(pre_filter, pre_filter)
-        if search:
-            leads = [l for l in leads if search.lower() in (l['business_name'] or '').lower()]
-        st.markdown(f"### {label} ({len(leads)})")
-        show_customer_cards(leads, f"No customers in '{label}' yet.", key_prefix=pre_filter)
-        if st.button("← Back to all customers"):
-            st.rerun()
-        return
-    if pre_filter == 'due':
-        leads = database.get_follow_ups_due()
-        if search:
-            leads = [l for l in leads if search.lower() in (l['business_name'] or '').lower()]
-        st.markdown(f"### 📅 Follow-ups due today ({len(leads)})")
-        show_customer_cards(leads, "🎉 No follow-ups due today!", key_prefix="due")
-        if st.button("← Back to all customers"):
-            st.rerun()
-        return
+            unmatched.append(l)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        f"🔥 Hot ({len(database.get_hot_leads())})",
-        f"📅 Follow Up ({len(database.get_follow_ups_due())})",
-        f"📋 All ({len(database.get_all_leads())})",
-        "📥 Import from Email"
-    ])
+    # Visual summary cards
+    st.markdown("##### Coverage by product")
+    cols = st.columns(len(PRODUCTS))
+    for col, (prod, emoji) in zip(cols, PRODUCTS):
+        n = len(by_product[prod])
+        hot_n = sum(1 for l in by_product[prod] if (l.get('lead_score') or 0) >= 70)
+        col.html(
+            f"<div style='background:rgba(255,255,255,0.7);"
+            f"backdrop-filter:blur(12px);border:1px solid rgba(15,23,42,0.08);"
+            f"border-radius:12px;padding:0.85rem 0.5rem;text-align:center'>"
+            f"<div style='font-size:1.6rem'>{emoji}</div>"
+            f"<div style='font-size:0.72rem;color:#64748b;text-transform:uppercase;"
+            f"letter-spacing:0.05em;font-weight:700'>{prod}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+            f"font-weight:700;color:#0a0f1c;margin-top:0.2rem'>{n}</div>"
+            f"<div style='font-size:0.7rem;color:#dc2626;font-weight:600'>"
+            f"🔥 {hot_n} hot</div></div>"
+        )
 
-    with tab1:
-        leads = database.get_hot_leads()
-        if search:
-            leads = [l for l in leads if search.lower() in (l['business_name'] or '').lower()]
-        show_customer_cards(leads, "No hot customers yet (score 70+).\n\nAdd customers and we'll score them automatically.", key_prefix="hot")
+    st.markdown("---")
+    st.markdown("##### Drill into any product line")
 
-    with tab2:
-        leads = database.get_follow_ups_due()
-        if search:
-            leads = [l for l in leads if search.lower() in (l['business_name'] or '').lower()]
-        show_customer_cards(leads, "🎉 No follow-ups due today!", key_prefix="fup")
+    for prod, emoji in PRODUCTS:
+        items = by_product[prod]
+        if not items:
+            continue
+        items_sorted = sorted(items, key=lambda l: -(l.get('lead_score') or 0))
+        hot_n = sum(1 for l in items_sorted if (l.get('lead_score') or 0) >= 70)
+        with st.expander(f"{emoji} **{prod}** — {len(items_sorted)} leads "
+                          f"({hot_n} hot)",
+                          expanded=False):
+            show_customer_cards(items_sorted, "_No leads for this product._",
+                                 key_prefix=f"prod_{prod.replace(' ', '_')}")
 
-    with tab3:
-        leads = database.search_leads(search) if search else database.get_all_leads()
-        show_customer_cards(leads, "No customers yet. Add your first above!", key_prefix="all")
-
-    with tab4:
-        show_import_email()
+    if unmatched:
+        with st.expander(f"❓ Unmatched / no product set — {len(unmatched)}"):
+            show_customer_cards(unmatched, "_None._", key_prefix="prod_unmatched")
 
 
 def show_customer_cards(leads, empty_msg, key_prefix="default"):
