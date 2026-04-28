@@ -2550,136 +2550,355 @@ def _inbox_status_fragment():
                 st.rerun()
 
 
+def _glass_chart(title, body_html, stat_html='', accent='#06b6d4'):
+    """Glass-card wrapper for a chart panel. Mono ◢ title left, optional stat right."""
+    stat_block = (
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.85rem;"
+        f"color:#e2e8f0;font-weight:700'>{stat_html}</div>"
+        if stat_html else ""
+    )
+    return (
+        f"<div style='background:rgba(15,23,42,0.55);"
+        f"border:1px solid rgba(148,163,184,0.12);border-radius:14px;"
+        f"padding:1.1rem 1.3rem 1.0rem;backdrop-filter:blur(12px);"
+        f"-webkit-backdrop-filter:blur(12px);margin-bottom:1.0rem;"
+        f"box-shadow:0 4px 18px rgba(15,23,42,0.20)'>"
+        f"<div style='display:flex;justify-content:space-between;"
+        f"align-items:center;margin-bottom:0.85rem'>"
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+        f"color:{accent};letter-spacing:0.18em;text-transform:uppercase;"
+        f"font-weight:700'>◢ {title}</div>"
+        f"{stat_block}</div>{body_html}</div>"
+    )
+
+
+def _sparkline_svg(values, color='#06b6d4', width=320, height=48):
+    """Single-line sparkline with a gradient fill underneath."""
+    if not values:
+        return (
+            f"<div style='height:{height}px;display:flex;align-items:center;"
+            f"justify-content:center;color:#64748b;font-size:0.82rem'>"
+            f"no data yet</div>"
+        )
+    max_v = max(values) or 1
+    n = len(values)
+    pts = []
+    fill_pts = [f"0,{height}"]
+    for i, v in enumerate(values):
+        x = round(i * width / max(1, n - 1), 1)
+        y = round(height - (v / max_v) * (height - 6) - 3, 1)
+        pts.append(f"{x},{y}")
+        fill_pts.append(f"{x},{y}")
+    fill_pts.append(f"{width},{height}")
+    line = ' '.join(pts)
+    fill = ' '.join(fill_pts)
+    grad_id = f"sg_{color.lstrip('#')}"
+    return (
+        f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
+        f'preserveAspectRatio="none" style="display:block;overflow:visible">'
+        f'<defs><linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0%" stop-color="{color}" stop-opacity="0.45"/>'
+        f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
+        f'</linearGradient></defs>'
+        f'<polygon points="{fill}" fill="url(#{grad_id})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{color}" '
+        f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        f'</svg>'
+    )
+
+
+def _dual_sparkline_svg(values_a, values_b, color_a='#06b6d4', color_b='#a3e635',
+                          width=320, height=48):
+    """Two overlaid sparklines (same Y-scale for honest comparison)."""
+    if not values_a and not values_b:
+        return _sparkline_svg([])
+    max_v = max(max(values_a or [0]), max(values_b or [0])) or 1
+    n = max(len(values_a or []), len(values_b or []))
+
+    def _polyline(values, color):
+        if not values:
+            return ''
+        pts = []
+        for i, v in enumerate(values):
+            x = round(i * width / max(1, n - 1), 1)
+            y = round(height - (v / max_v) * (height - 6) - 3, 1)
+            pts.append(f"{x},{y}")
+        return (f'<polyline points="{" ".join(pts)}" fill="none" '
+                f'stroke="{color}" stroke-width="2" stroke-linejoin="round" '
+                f'stroke-linecap="round"/>')
+
+    return (
+        f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
+        f'preserveAspectRatio="none" style="display:block;overflow:visible">'
+        f'{_polyline(values_a, color_a)}'
+        f'{_polyline(values_b, color_b)}'
+        f'</svg>'
+    )
+
+
 def _today_dashboard_charts():
-    """Visualizations for the team dashboard — pipeline, activity over time, conversion funnel."""
-    import pandas as pd
+    """Pipeline telemetry — futuristic dark cards with custom SVG/HTML
+    visualizations. All queries are dual-backend safe (no SQLite-only date math)."""
+    from collections import Counter
+    from datetime import date, timedelta
 
-    st.markdown("### 📊 Pipeline overview")
+    # ===== Pipeline funnel — full-width horizontal bars =====
+    all_leads = database.get_all_leads()
+    status_counts = Counter(l['status'] for l in all_leads if l['status'])
+    funnel_order = [
+        ('new',           '🆕 New',           '#67e8f9'),
+        ('researched',    '📚 Researched',    '#22d3ee'),
+        ('drafted',       '✏️ Draft ready',   '#06b6d4'),
+        ('contacted',     '📞 Contacted',     '#bef264'),
+        ('interested',    '⭐ Interested',    '#a3e635'),
+        ('trial_offered', '🎁 Trial offered', '#84cc16'),
+        ('sample_sent',   '📦 Sample sent',   '#65a30d'),
+        ('closed_won',    '✅ Won',           '#10b981'),
+    ]
+    funnel_active = [(l, status_counts.get(s, 0), c)
+                      for s, l, c in funnel_order
+                      if status_counts.get(s, 0) > 0]
+    total_in_flight = sum(c for _, c, _ in funnel_active)
+    max_in_funnel = max((c for _, c, _ in funnel_active), default=1)
 
-    col1, col2 = st.columns(2)
+    if funnel_active:
+        bars_html = ""
+        for label, count, color in funnel_active:
+            pct = round(100 * count / max_in_funnel)
+            bars_html += (
+                f"<div style='display:flex;align-items:center;gap:0.8rem;"
+                f"margin-bottom:0.5rem'>"
+                f"<div style='flex:0 0 140px;font-size:0.82rem;color:#cbd5e1;"
+                f"font-weight:600'>{label}</div>"
+                f"<div style='flex:1;height:9px;"
+                f"background:rgba(148,163,184,0.10);border-radius:999px;"
+                f"overflow:hidden;position:relative'>"
+                f"<div style='height:100%;width:{pct}%;"
+                f"background:linear-gradient(90deg,{color}aa,{color});"
+                f"border-radius:999px;box-shadow:0 0 10px {color}66'></div>"
+                f"</div>"
+                f"<div style='flex:0 0 32px;text-align:right;"
+                f"font-family:JetBrains Mono,monospace;color:#e2e8f0;"
+                f"font-weight:700;font-size:0.92rem'>{count}</div>"
+                f"</div>"
+            )
+        funnel_stat = (f"{total_in_flight} <span style='color:#64748b;"
+                        f"font-size:0.7rem;letter-spacing:0.10em;"
+                        f"text-transform:uppercase;font-weight:600'>in flight</span>")
+    else:
+        bars_html = (
+            "<div style='color:#64748b;font-size:0.88rem;padding:0.5rem 0'>"
+            "No pipeline data yet — start adding customers.</div>"
+        )
+        funnel_stat = ""
 
-    # ===== PIPELINE FUNNEL CHART =====
-    with col1:
-        st.caption("Leads at each stage")
-        all_leads = database.get_all_leads()
-        from collections import Counter
-        status_counts = Counter(l['status'] for l in all_leads if l['status'])
+    st.markdown(_glass_chart(
+        title='PIPELINE FUNNEL',
+        stat_html=funnel_stat,
+        body_html=bars_html,
+    ), unsafe_allow_html=True)
 
-        # Order by sales funnel
-        funnel_order = [
-            ('new', '🆕 New'),
-            ('researched', '📚 Researched'),
-            ('drafted', '✏️ Draft ready'),
-            ('contacted', '📞 Contacted'),
-            ('interested', '⭐ Interested'),
-            ('trial_offered', '🎁 Trial offered'),
-            ('sample_sent', '📦 Sample sent'),
-            ('closed_won', '✅ Won'),
-        ]
-        funnel_data = [(label, status_counts.get(s, 0)) for s, label in funnel_order]
+    # ===== 14-day activity sparkline + Email volume — dual sparkline =====
+    cutoff = (datetime.utcnow() - timedelta(days=14)).strftime('%Y-%m-%d %H:%M:%S')
+    days = [(date.today() - timedelta(days=i)).isoformat() for i in range(13, -1, -1)]
 
-        if any(c for _, c in funnel_data):
-            df = pd.DataFrame(funnel_data, columns=['Stage', 'Count'])
-            df = df[df['Count'] > 0]
-            if not df.empty:
-                st.bar_chart(df.set_index('Stage'), height=240, color='#4d7c0f')
+    activity_values, activity_total = [0] * 14, 0
+    try:
+        conn = database.get_connection()
+        cur = conn.cursor()
+        cur.execute('''SELECT DATE(created_at) as day, COUNT(*) as count
+                       FROM activities WHERE created_at >= ?
+                       GROUP BY DATE(created_at) ORDER BY day''', (cutoff,))
+        counts = {str(r['day'])[:10]: r['count'] for r in cur.fetchall()}
+        conn.close()
+        activity_values = [counts.get(d, 0) for d in days]
+        activity_total = sum(activity_values)
+    except Exception:
+        pass
+
+    sent_values, recv_values, sent_total, recv_total = [0]*14, [0]*14, 0, 0
+    try:
+        conn = database.get_connection()
+        cur = conn.cursor()
+        cur.execute('''SELECT DATE(created_at) as day, COUNT(*) as count
+                       FROM outreach_drafts
+                       WHERE sent = 1 AND created_at >= ?
+                       GROUP BY DATE(created_at) ORDER BY day''', (cutoff,))
+        sent_counts = {str(r['day'])[:10]: r['count'] for r in cur.fetchall()}
+        cur.execute('''SELECT DATE(received_at) as day, COUNT(*) as count
+                       FROM inbound_messages WHERE received_at >= ?
+                       GROUP BY DATE(received_at) ORDER BY day''', (cutoff,))
+        recv_counts = {str(r['day'])[:10]: r['count'] for r in cur.fetchall()}
+        conn.close()
+        sent_values = [sent_counts.get(d, 0) for d in days]
+        recv_values = [recv_counts.get(d, 0) for d in days]
+        sent_total = sum(sent_values)
+        recv_total = sum(recv_values)
+    except Exception:
+        pass
+
+    col_act, col_email = st.columns(2)
+    with col_act:
+        st.markdown(_glass_chart(
+            title='ACTIVITY · 14d',
+            stat_html=(f"<span style='color:#06b6d4'>{activity_total}</span> "
+                        f"<span style='color:#64748b;font-size:0.7rem;"
+                        f"letter-spacing:0.10em;text-transform:uppercase;"
+                        f"font-weight:600'>events</span>"),
+            body_html=_sparkline_svg(activity_values, color='#06b6d4'),
+        ), unsafe_allow_html=True)
+    with col_email:
+        legend = (
+            f"<div style='display:flex;gap:0.8rem;margin-top:0.5rem;"
+            f"font-size:0.68rem;color:#94a3b8;font-family:JetBrains Mono,monospace;"
+            f"letter-spacing:0.08em;text-transform:uppercase;font-weight:600'>"
+            f"<span><span style='color:#06b6d4'>━</span> sent</span>"
+            f"<span><span style='color:#a3e635'>━</span> received</span>"
+            f"</div>"
+        )
+        st.markdown(_glass_chart(
+            title='EMAILS · 14d',
+            stat_html=(f"<span style='color:#06b6d4'>↑ {sent_total}</span>  "
+                        f"<span style='color:#a3e635'>↓ {recv_total}</span>"),
+            body_html=_dual_sparkline_svg(sent_values, recv_values) + legend,
+        ), unsafe_allow_html=True)
+
+    # ===== Bid Intelligence + Lead sources =====
+    bid_stats = database.bid_opportunities_stats()
+    top_bids = []
+    try:
+        top_bids = database.get_bid_opportunities(min_score=60, limit=3)
+    except Exception:
+        pass
+
+    src_data = []
+    try:
+        conn = database.get_connection()
+        cur = conn.cursor()
+        cur.execute('''SELECT COALESCE(lead_source, 'unknown') as source,
+                              COUNT(*) as count FROM leads
+                       WHERE lead_source != 'team_internal' OR lead_source IS NULL
+                       GROUP BY lead_source ORDER BY count DESC LIMIT 6''')
+        rows = cur.fetchall()
+        conn.close()
+        friendly = {
+            'autopilot': '🤖 Autopilot',
+            'autopilot_osm': '🌍 OpenStreetMap',
+            'web3forms_webhook': '🌐 Web form',
+            'compose': '✉️ Manual',
+            'manual': '✏️ Manual',
+            'csv_import': '📥 CSV',
+            'sample': '🐎 Sample',
+            'inbound_email': '📨 Email reply',
+            'bid_intelligence': '💰 Bid Intelligence',
+            'unsolicited_inbound': '📥 Unsolicited',
+            'unknown': '❓ Unknown',
+        }
+        src_data = [(friendly.get(r['source'], r['source']), r['count'])
+                    for r in rows]
+    except Exception:
+        pass
+
+    col_bids, col_src = st.columns(2)
+
+    with col_bids:
+        if bid_stats['total'] == 0:
+            bid_body = (
+                "<div style='color:#64748b;font-size:0.88rem;padding:0.6rem 0;"
+                "text-align:center'>"
+                "<div style='font-size:1.6rem;opacity:0.5;margin-bottom:0.3rem'>💰</div>"
+                "<div>No bids loaded yet.</div>"
+                "<div style='font-size:0.78rem;margin-top:0.4rem;opacity:0.8'>"
+                "Operations → Bids → Refresh from SAM.gov</div></div>"
+            )
         else:
-            st.caption("_No pipeline data yet — start adding customers_")
+            bid_body = (
+                f"<div style='display:flex;justify-content:space-between;"
+                f"gap:0.8rem;margin-bottom:0.9rem'>"
+                f"<div style='text-align:center;flex:1'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+                f"font-weight:700;color:#e2e8f0;line-height:1'>{bid_stats['total']}</div>"
+                f"<div style='font-size:0.6rem;color:#64748b;text-transform:uppercase;"
+                f"letter-spacing:0.10em;font-weight:600;margin-top:0.25rem'>Total</div></div>"
+                f"<div style='text-align:center;flex:1'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+                f"font-weight:700;color:#06b6d4;line-height:1'>{bid_stats['new']}</div>"
+                f"<div style='font-size:0.6rem;color:#64748b;text-transform:uppercase;"
+                f"letter-spacing:0.10em;font-weight:600;margin-top:0.25rem'>New</div></div>"
+                f"<div style='text-align:center;flex:1'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+                f"font-weight:700;color:#a3e635;line-height:1'>{bid_stats['hot']}</div>"
+                f"<div style='font-size:0.6rem;color:#64748b;text-transform:uppercase;"
+                f"letter-spacing:0.10em;font-weight:600;margin-top:0.25rem'>Hot ≥60</div></div>"
+                f"</div>"
+            )
+            if top_bids:
+                t = top_bids[0]
+                title = (t.get('title') or 'Untitled')[:80]
+                score = t.get('match_score') or 0
+                deadline = (t.get('deadline') or '')[:10] or 'no deadline'
+                product = t.get('product_fit') or ''
+                bid_body += (
+                    f"<div style='border-top:1px solid rgba(148,163,184,0.15);"
+                    f"padding-top:0.8rem;margin-top:0.4rem'>"
+                    f"<div style='font-size:0.62rem;color:#a3e635;"
+                    f"text-transform:uppercase;letter-spacing:0.16em;"
+                    f"font-weight:700;font-family:JetBrains Mono,monospace;"
+                    f"margin-bottom:0.4rem'>◢ TOP HOT BID"
+                    f"{f' · {product}' if product else ''}</div>"
+                    f"<div style='font-weight:700;color:#e2e8f0;"
+                    f"font-size:0.92rem;line-height:1.35'>{title}</div>"
+                    f"<div style='font-size:0.78rem;color:#94a3b8;"
+                    f"margin-top:0.35rem;display:flex;gap:0.7rem'>"
+                    f"<span><strong style='color:#a3e635;"
+                    f"font-family:JetBrains Mono,monospace'>{score}</strong>/100</span>"
+                    f"<span style='color:#475569'>·</span>"
+                    f"<span>deadline {deadline}</span></div></div>"
+                )
 
-    # ===== ACTIVITY-PER-DAY CHART =====
-    with col2:
-        st.caption("Activity in the last 14 days")
-        from datetime import timedelta
-        try:
-            conn = database.get_connection()
-            cur = conn.cursor()
-            cur.execute('''SELECT DATE(created_at) as day, COUNT(*) as count
-                           FROM activities
-                           WHERE created_at >= datetime('now', '-14 days')
-                           GROUP BY DATE(created_at)
-                           ORDER BY day''')
-            rows = cur.fetchall()
-            conn.close()
+        st.markdown(_glass_chart(
+            title='BID INTELLIGENCE',
+            body_html=bid_body,
+            accent='#a3e635',
+        ), unsafe_allow_html=True)
+        if bid_stats['total'] > 0:
+            if st.button("Open Bid panel →", key="today_open_bids",
+                          use_container_width=True):
+                st.session_state.page = "operations"
+                st.session_state.ops_subpage = "bids"
+                st.rerun()
 
-            if rows:
-                df = pd.DataFrame([(r['day'], r['count']) for r in rows], columns=['Day', 'Events'])
-                df['Day'] = pd.to_datetime(df['Day'])
-                df = df.set_index('Day')
-                st.line_chart(df, height=240, color='#0ea5e9')
-            else:
-                st.caption("_No activity yet — use Autopilot or Compose to start_")
-        except Exception:
-            st.caption("_Activity chart unavailable_")
+    with col_src:
+        if not src_data:
+            src_body = ("<div style='color:#64748b;font-size:0.88rem;"
+                        "padding:0.5rem 0'>No leads yet.</div>")
+        else:
+            max_src = max(c for _, c in src_data) or 1
+            src_body = ""
+            for label, count in src_data:
+                pct = round(100 * count / max_src)
+                src_body += (
+                    f"<div style='display:flex;align-items:center;gap:0.7rem;"
+                    f"margin-bottom:0.45rem'>"
+                    f"<div style='flex:1;font-size:0.8rem;color:#cbd5e1;"
+                    f"font-weight:600;white-space:nowrap;overflow:hidden;"
+                    f"text-overflow:ellipsis'>{label}</div>"
+                    f"<div style='flex:0 0 70px;height:7px;"
+                    f"background:rgba(148,163,184,0.10);border-radius:999px;"
+                    f"overflow:hidden'>"
+                    f"<div style='height:100%;width:{pct}%;"
+                    f"background:linear-gradient(90deg,#06b6d4,#a3e635);"
+                    f"border-radius:999px'></div></div>"
+                    f"<div style='flex:0 0 26px;text-align:right;"
+                    f"font-family:JetBrains Mono,monospace;color:#e2e8f0;"
+                    f"font-weight:700;font-size:0.85rem'>{count}</div>"
+                    f"</div>"
+                )
 
-    # ===== EMAIL VOLUME (sent vs received) + LEAD SOURCES =====
-    col3, col4 = st.columns(2)
-
-    with col3:
-        st.markdown("##### 📤📨 Emails: sent vs received")
-        try:
-            conn = database.get_connection()
-            cur = conn.cursor()
-            cur.execute('''SELECT DATE(created_at) as day, COUNT(*) as count
-                           FROM outreach_drafts
-                           WHERE sent = 1 AND created_at >= datetime('now', '-14 days')
-                           GROUP BY DATE(created_at) ORDER BY day''')
-            sent_rows = cur.fetchall()
-            cur.execute('''SELECT DATE(received_at) as day, COUNT(*) as count
-                           FROM inbound_messages
-                           WHERE received_at >= datetime('now', '-14 days')
-                           GROUP BY DATE(received_at) ORDER BY day''')
-            received_rows = cur.fetchall()
-            conn.close()
-
-            sent_dict = {r['day']: r['count'] for r in sent_rows}
-            recv_dict = {r['day']: r['count'] for r in received_rows}
-            all_days = sorted(set(list(sent_dict.keys()) + list(recv_dict.keys())))
-
-            if all_days:
-                df = pd.DataFrame({
-                    'Day': pd.to_datetime(all_days),
-                    'Sent': [sent_dict.get(d, 0) for d in all_days],
-                    'Received': [recv_dict.get(d, 0) for d in all_days],
-                }).set_index('Day')
-                st.line_chart(df, height=200, color=['#0ea5e9', '#16a34a'])
-            else:
-                st.caption("_No email data yet_")
-        except Exception:
-            st.caption("_Email chart unavailable_")
-
-    with col4:
-        st.markdown("##### 🌍 Where leads come from")
-        try:
-            conn = database.get_connection()
-            cur = conn.cursor()
-            cur.execute('''SELECT COALESCE(lead_source, 'unknown') as source, COUNT(*) as count
-                           FROM leads
-                           WHERE lead_source != 'team_internal' OR lead_source IS NULL
-                           GROUP BY lead_source ORDER BY count DESC LIMIT 8''')
-            rows = cur.fetchall()
-            conn.close()
-
-            if rows:
-                friendly = {
-                    'autopilot': '🤖 Autopilot',
-                    'autopilot_osm': '🌍 OpenStreetMap',
-                    'web3forms_webhook': '🌐 Website form',
-                    'compose': '✉️ Manual',
-                    'manual': '✏️ Manual entry',
-                    'csv_import': '📥 CSV import',
-                    'sample': '🐎 Sample',
-                    'inbound_email': '📨 Email reply',
-                    'unknown': '❓ Unknown',
-                }
-                df = pd.DataFrame(
-                    [(friendly.get(r['source'], r['source']), r['count']) for r in rows],
-                    columns=['Source', 'Count']
-                ).set_index('Source')
-                st.bar_chart(df, height=200, color='#f59e0b')
-            else:
-                st.caption("_No leads yet_")
-        except Exception:
-            st.caption("_Lead-source chart unavailable_")
+        st.markdown(_glass_chart(
+            title='LEAD SOURCES',
+            body_html=src_body,
+        ), unsafe_allow_html=True)
 
 
 @st.fragment(run_every=30)
