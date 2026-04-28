@@ -90,6 +90,13 @@ def _check_password():
                 st.session_state.team_password_ok = True
                 st.rerun()
             else:
+                try:
+                    import audit_log as _al
+                    _al.log('team_password_failed',
+                             "Failed team password attempt at Stage 1 gate",
+                             details={'stage': 1})
+                except Exception:
+                    pass
                 st.error("❌ Wrong team password")
         return False
 
@@ -184,8 +191,24 @@ def _check_password():
                     st.session_state.logged_in_user_email = chosen_email
                     st.session_state.pop('just_created_account', None)
                     database.user_record_login(chosen_email)
+                    try:
+                        import audit_log as _al
+                        _al.log('login', f"Login: {chosen_email}",
+                                 target_type='team_member',
+                                 target_label=chosen_email)
+                    except Exception:
+                        pass
                     st.rerun()
                 else:
+                    try:
+                        import audit_log as _al
+                        _al.log('login_failed',
+                                 f"Failed login attempt: {chosen_email}",
+                                 target_type='team_member',
+                                 target_label=chosen_email,
+                                 details={'reason': 'wrong_password'})
+                    except Exception:
+                        pass
                     st.error("❌ Wrong password for that account")
         elif chosen_email:
             st.markdown(f"##### 🆕 Create account for `{chosen_email}`")
@@ -2356,7 +2379,19 @@ def show_top_nav():
         ("⚙️ Setup", "setup"),
     ]
     if is_admin():
-        nav_items.append(("🛡 Admin", "admin"))
+        # Count pending self-registered users so the admin nav button can
+        # show a notification badge — Joseph sees "🛡 Admin (1)" the
+        # moment a new person signs up, without having to dig in.
+        try:
+            import team as _t
+            pending_count = sum(1 for m in _t.load_team()
+                                if m.get('_self_registered'))
+        except Exception:
+            pending_count = 0
+        admin_label = (
+            f"🛡 Admin ({pending_count})" if pending_count > 0 else "🛡 Admin"
+        )
+        nav_items.append((admin_label, "admin"))
     # Same container pattern — mobile CSS :has() selects this row for its own
     # 2-col grid layout instead of the global force-stack rule.
     with st.container():
