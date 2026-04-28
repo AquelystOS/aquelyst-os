@@ -3465,6 +3465,22 @@ def _home_activity_fragment():
         time_str = format_date_friendly(a['created_at'])
         act_type = a['activity_type'] if 'activity_type' in a.keys() else 'system'
         color = type_color.get(act_type, '#64748b')
+        actor_email = (a['created_by'] if 'created_by' in a.keys() else '') or ''
+        actor_first = ''
+        if actor_email:
+            try:
+                m = team.get_member_by_email(actor_email)
+                actor_first = (m.get('name') if m else actor_email.split('@')[0]).split()[0]
+            except Exception:
+                actor_first = actor_email.split('@')[0]
+        actor_chip = (
+            f"<span style='display:inline-block;background:rgba(6,182,212,0.16);"
+            f"color:#a3e635;padding:0.05rem 0.45rem;border-radius:999px;"
+            f"font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+            f"font-weight:700;letter-spacing:0.10em;text-transform:uppercase;"
+            f"margin-left:0.45rem;vertical-align:middle'>{actor_first}</span>"
+            if actor_first else ""
+        )
 
         st.html(
             f"<div style='position:relative;"
@@ -3479,7 +3495,8 @@ def _home_activity_fragment():
             f"align-items:flex-start;gap:0.6rem'>"
             f"<div style='font-weight:700;color:#e2e8f0;font-size:0.88rem;"
             f"line-height:1.3;min-width:0;flex:1;"
-            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{biz}</div>"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>"
+            f"{biz}{actor_chip}</div>"
             f"<div style='color:{color};opacity:0.75;font-size:0.66rem;"
             f"font-family:JetBrains Mono,monospace;letter-spacing:0.06em;"
             f"text-transform:uppercase;font-weight:700;flex-shrink:0;"

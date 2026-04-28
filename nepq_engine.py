@@ -1060,6 +1060,25 @@ def generate_followup(lead_data, prior_messages, touch_number):
     first_name = (lead_data.get('contact_name') or 'there').split()[0]
     pain = lead_data.get('pain_hypothesis') or ''
 
+    # Cross-user awareness: warn the AI if a different teammate sent the
+    # original / prior touches, so the follow-up doesn't read like a
+    # different person suddenly took over the conversation mid-thread.
+    current_user = team.get_current_user()
+    me_email = (current_user.get('email') or '').lower()
+    me_first = (current_user.get('name') or '').split()[0] if current_user.get('name') else ''
+    last_by = (lead_data.get('last_contacted_by') or '').lower()
+    peer_warning = ""
+    if last_by and last_by != me_email:
+        peer_member = team.get_member_by_email(last_by) or {}
+        peer_first = (peer_member.get('name') or last_by).split()[0]
+        peer_warning = (
+            f"\n⚠️ HEADS UP — TEAMMATE OWNS THIS THREAD: {peer_first} "
+            f"({last_by}) sent the prior emails. You are {me_first} "
+            f"following up on their behalf. Acknowledge that — open with "
+            f"something like 'Following up on {peer_first}'s note...' so "
+            f"the prospect isn't confused by a new sender appearing.\n"
+        )
+
     touch_focus = {
         2: ("EDUCATIONAL: Briefly explain HOW odor at scale actually works for THEIR vertical "
             "(use the burden tags / pain hypothesis on the lead). No pitch. Just useful insight. "
@@ -1086,7 +1105,7 @@ PROSPECT:
 - Business: {business}
 - First name: {first_name}
 - Pain: {pain}
-
+{peer_warning}
 PRIOR EMAILS (most recent last):
 {prior_summary}
 
@@ -1126,6 +1145,19 @@ def generate_reply_to_inbound(lead_data, conversation_history, their_latest_mess
     # Detect if this is a teammate (different reply mode)
     recipient_email = (lead_data.get('email') or '').lower().strip()
     teammate = team.get_member_by_email(recipient_email)
+
+    # Owner of the thread = whoever last contacted the prospect.
+    # If reply is being drafted by a different user, voice-shift the prompt
+    # so the response speaks AS the original owner (continuity of thread).
+    current_user = team.get_current_user()
+    me_email = (current_user.get('email') or '').lower()
+    last_by = (lead_data.get('last_contacted_by') or '').lower()
+    voice_user = current_user
+    if last_by and last_by != me_email:
+        owner_member = team.get_member_by_email(last_by)
+        if owner_member:
+            voice_user = owner_member
+    voice_first = (voice_user.get('name') or '').split()[0] if voice_user.get('name') else ''
 
     if teammate:
         # PEER MODE — casual reply to a teammate
@@ -1179,7 +1211,7 @@ NEPQ STYLE GUIDELINES:
 - Match their tone and length
 - Keep it 2-5 sentences MAX
 - Subject: "Re: <previous subject>" (preserve thread)
-- Sign off as the logged-in user's first name
+- Sign off as **{voice_first or 'AqueLyst'}** (this thread is owned by them — keep continuity)
 
 EXAMPLES OF GOOD vs BAD:
 
