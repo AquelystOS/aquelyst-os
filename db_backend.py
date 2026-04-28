@@ -64,8 +64,17 @@ def _translate_query(q):
     # Boolean defaults
     out = re.sub(r'BOOLEAN\s+DEFAULT\s+0', 'BOOLEAN DEFAULT FALSE', out, flags=re.IGNORECASE)
     out = re.sub(r'BOOLEAN\s+DEFAULT\s+1', 'BOOLEAN DEFAULT TRUE', out, flags=re.IGNORECASE)
-    # SQLite uses INTEGER for boolean-ish columns with 0/1 defaults too
-    # leave those alone — Postgres accepts integers in those columns
+    # Boolean-column comparisons — SQLite stores bools as 0/1 ints and tolerates
+    # `opt_out = 1`. Postgres is strict and raises UndefinedFunction on
+    # boolean-vs-integer comparisons. Translate the known boolean columns.
+    for col in ('opt_out', 'approved', 'sent', 'completed'):
+        out = re.sub(rf'\b{col}\s*=\s*1\b', f'{col} = TRUE', out)
+        out = re.sub(rf'\b{col}\s*=\s*0\b', f'{col} = FALSE', out)
+        out = re.sub(rf'\b{col}\s*!=\s*1\b', f'{col} != TRUE', out)
+        out = re.sub(rf'\b{col}\s*!=\s*0\b', f'{col} != FALSE', out)
+        # SET col = 1 / SET col = 0 in UPDATE statements
+        out = re.sub(rf'SET\s+{col}\s*=\s*1', f'SET {col} = TRUE', out, flags=re.IGNORECASE)
+        out = re.sub(rf'SET\s+{col}\s*=\s*0', f'SET {col} = FALSE', out, flags=re.IGNORECASE)
     # datetime intervals
     out = re.sub(
         r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*days?'\s*\)",
@@ -74,7 +83,6 @@ def _translate_query(q):
         r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*hours?'\s*\)",
         r"(NOW() - INTERVAL '\1 hours')", out)
     out = re.sub(r"datetime\(\s*'now'\s*\)", 'NOW()', out)
-    # SQLite ALTER TABLE ADD COLUMN — same syntax in PG
     return out
 
 
