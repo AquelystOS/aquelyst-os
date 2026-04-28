@@ -507,6 +507,163 @@ st.markdown("""
         border-radius: 999px;
     }
     ::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.3); }
+
+    /* ==================== MOBILE / TABLET RESPONSIVE ====================
+       Strictly @media-scoped — desktop layout untouched. iPhones (390px),
+       small Androids (360px), and tablets in portrait (~768px) all adapt. */
+
+    /* Tablets in portrait + large phones */
+    @media (max-width: 768px) {
+        .block-container {
+            padding-left: 0.7rem !important;
+            padding-right: 0.7rem !important;
+            padding-top: 0.4rem !important;
+            max-width: 100% !important;
+        }
+
+        /* Heroes — squeeze padding + corner radius */
+        [style*="background:linear-gradient(135deg,#0a0f1c"] {
+            padding: 1.0rem 1.1rem !important;
+            border-radius: 12px !important;
+        }
+        /* Hero title scales down */
+        [style*="background:linear-gradient(135deg,#0a0f1c"] [style*="font-size:2rem"],
+        [style*="background:linear-gradient(135deg,#0a0f1c"] [style*="font-size:2.4rem"] {
+            font-size: 1.45rem !important;
+            line-height: 1.15 !important;
+        }
+        /* Hero rows wrap so stats fall under the greeting on narrow screens */
+        [style*="background:linear-gradient(135deg,#0a0f1c"]
+          [style*="display:flex"][style*="justify-content:space-between"][style*="align-items:flex-end"] {
+            flex-wrap: wrap !important;
+            gap: 0.8rem !important;
+        }
+        /* Mono timestamp + eyebrow strip — tighter letter-spacing so it fits */
+        [style*="background:linear-gradient(135deg,#0a0f1c"]
+          [style*="letter-spacing:0.22em"] {
+            letter-spacing: 0.10em !important;
+            font-size: 0.58rem !important;
+        }
+        /* Mono OS pill in top nav */
+        [style*="letter-spacing:0.18em"][style*="JetBrains Mono"],
+        [style*="letter-spacing:0.20em"][style*="JetBrains Mono"] {
+            letter-spacing: 0.10em !important;
+        }
+
+        /* Tabs — wrap onto multiple lines instead of horizontal scroll */
+        div[data-baseweb="tab-list"] { flex-wrap: wrap !important; }
+        button[data-baseweb="tab"] {
+            font-size: 0.82rem !important;
+            padding: 0.4rem 0.85rem !important;
+        }
+
+        /* Buttons compact */
+        .stButton button {
+            padding: 0.55rem 0.9rem !important;
+            font-size: 0.85rem !important;
+        }
+        .stButton button[kind="primary"] {
+            padding: 0.6rem 1rem !important;
+        }
+
+        /* Logo image (top nav + login) shrinks */
+        img[alt="AqueLyst"] { max-height: 40px; height: auto; }
+
+        /* Streamlit columns: keep min-width sane so they don't overflow */
+        [data-testid="column"] { min-width: 0 !important; }
+
+        /* KPI / provider rings shrink so 5-across stays readable */
+        [style*="border-radius:50%"][style*="conic-gradient"][style*="width:96px"][style*="height:96px"] {
+            width: 64px !important;
+            height: 64px !important;
+        }
+        [style*="border-radius:50%"][style*="conic-gradient"][style*="width:96px"]
+          > [style*="width:70px"][style*="height:70px"] {
+            width: 46px !important;
+            height: 46px !important;
+        }
+        [style*="border-radius:50%"][style*="conic-gradient"][style*="width:88px"][style*="height:88px"] {
+            width: 60px !important;
+            height: 60px !important;
+        }
+        [style*="border-radius:50%"][style*="conic-gradient"][style*="width:88px"]
+          > [style*="width:64px"][style*="height:64px"] {
+            width: 42px !important;
+            height: 42px !important;
+        }
+
+        /* Pipeline funnel — narrow label column, smaller font */
+        [style*="flex:0 0 140px"] {
+            flex: 0 0 100px !important;
+            font-size: 0.74rem !important;
+        }
+
+        /* Glass cards / chart cards — reduced padding */
+        [style*="backdrop-filter:blur(12px)"][style*="border-radius:14px"] {
+            padding: 0.9rem 1.0rem !important;
+        }
+    }
+
+    /* iPhone-class phones (390px viewport and smaller) */
+    @media (max-width: 480px) {
+        .block-container {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+
+        /* Hero title even smaller so the greeting + accent fit on one line */
+        [style*="background:linear-gradient(135deg,#0a0f1c"] [style*="font-size:2rem"],
+        [style*="background:linear-gradient(135deg,#0a0f1c"] [style*="font-size:2.4rem"] {
+            font-size: 1.25rem !important;
+        }
+
+        /* Hero stat strip wraps to 2 rows of stats */
+        [style*="background:linear-gradient(135deg,#0a0f1c"]
+          [style*="display:flex"][style*="gap:1.1rem"],
+        [style*="background:linear-gradient(135deg,#0a0f1c"]
+          [style*="display:flex"][style*="gap:1.0rem"] {
+            flex-wrap: wrap !important;
+            justify-content: flex-start !important;
+            gap: 0.7rem !important;
+        }
+
+        /* Logo even more compact */
+        img[alt="AqueLyst"] { max-height: 32px; }
+
+        /* Section headers shrink letter-spacing */
+        [style*="letter-spacing:0.20em"][style*="JetBrains Mono"],
+        [style*="letter-spacing:0.18em"][style*="JetBrains Mono"],
+        [style*="letter-spacing:0.16em"][style*="JetBrains Mono"] {
+            letter-spacing: 0.08em !important;
+        }
+
+        /* KPI ring labels: shorter line height so 5 stacked names fit */
+        [style*="text-transform:uppercase"][style*="letter-spacing:0.12em"] {
+            letter-spacing: 0.06em !important;
+        }
+
+        /* Top nav user badge — single line */
+        [style*="background:#4d7c0f"][style*="border-radius:12px"][style*="font-size:0.85rem"] {
+            font-size: 0.72rem !important;
+            padding: 0.18rem 0.55rem !important;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 50vw;
+        }
+
+        /* Pipeline funnel — even narrower label */
+        [style*="flex:0 0 100px"] {
+            flex: 0 0 78px !important;
+            font-size: 0.7rem !important;
+        }
+    }
+
+    /* Touch-target friendliness: min 44px tap area on coarse-pointer devices */
+    @media (pointer: coarse) {
+        .stButton button { min-height: 44px; }
+        button[data-baseweb="tab"] { min-height: 40px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
