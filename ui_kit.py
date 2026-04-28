@@ -6,9 +6,30 @@ heroes, monospace ◢ section headers, glass cards. This file is the source of
 truth for that vocabulary so individual pages don't redefine it.
 """
 
+import base64
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 
 import streamlit as st
+
+
+_LOGO_PATH = Path(__file__).parent / "assets" / "aquelyst-logo.png"
+
+
+@lru_cache(maxsize=1)
+def _logo_data_uri():
+    """Read the official AqueLyst logo PNG once, encode as base64 data URI so
+    it can be inlined inside any HTML string. Returns None if file missing —
+    callers fall back to the inline SVG wordmark."""
+    try:
+        if not _LOGO_PATH.exists():
+            return None
+        with open(_LOGO_PATH, 'rb') as f:
+            b64 = base64.b64encode(f.read()).decode('ascii')
+        return f"data:image/png;base64,{b64}"
+    except Exception:
+        return None
 
 
 _PULSE_KEYFRAMES_INJECTED = False
@@ -226,16 +247,42 @@ def _hex_to_rgb(hex_color):
 # rendered in Playfair Display serif. No image file required — pure vector.
 # ============================================================================
 def brand_wordmark(size='md', show_subtitle=False, on_dark=False, with_mark=True):
-    """Render the AqueLyst inline logo as an HTML string (returned, not printed).
+    """Render the AqueLyst logo as an HTML string (returned, not printed).
+
+    If the official logo PNG exists at assets/aquelyst-logo.png it's used as
+    a data URI — pixel-perfect match to the marketing logo. Otherwise falls
+    back to a vector SVG/HTML recreation (cyan 'Aque' + lime 'Lyst' in
+    Playfair Display + molecular dot mark).
 
     Args:
         size: 'sm' (24px), 'md' (40px), 'lg' (72px), 'xl' (104px)
         show_subtitle: show "ODOR ELIMINATING TECHNOLOGY" tagline below
+                        (only honored on the inline-SVG fallback — official
+                        PNG already includes it as part of the artwork)
         on_dark: True if rendering on a dark surface — adapts subtitle color
-        with_mark: include the molecular dot pattern to the left of the wordmark
+        with_mark: include the molecular dot pattern (inline-SVG fallback only)
     """
     sizes = {'sm': 24, 'md': 40, 'lg': 72, 'xl': 104}
     font_px = sizes.get(size, 40)
+
+    # Use the official logo PNG when available — that's the real wordmark
+    data_uri = _logo_data_uri()
+    if data_uri:
+        # Original PNG aspect ratio is ~2800:1200 ≈ 2.33:1. Height ladder maps
+        # to font_px so visual weight matches inline-SVG fallback.
+        height_px = {
+            'sm': 32,
+            'md': 56,
+            'lg': 96,
+            'xl': 140,
+        }.get(size, 56)
+        return (
+            f'<img src="{data_uri}" alt="AqueLyst" '
+            f'style="height:{height_px}px;width:auto;vertical-align:middle;'
+            f'display:inline-block" />'
+        )
+
+    # Fallback: inline SVG/HTML recreation (works without the asset file)
     mark_px = int(font_px * 1.5)
 
     # Molecular dot pattern — cyan + lime dots scattered along a swirling
