@@ -2365,65 +2365,99 @@ def show_home():
     col_left, col_right = st.columns([3, 2])
 
     with col_left:
-        st.markdown("##### 🔥 Top hot leads")
+        ui_kit.section_header('TOP HOT LEADS', accent='#a3e635')
         hot_leads = database.get_hot_leads()[:5]
         if hot_leads:
             for l in hot_leads:
                 score = l['lead_score'] or 0
-                color = "#dc3545" if score >= 80 else "#f59e0b"
+                # Brand-aligned score band: lime (90+), amber (80-89), orange (70-79)
+                ring = ('#a3e635' if score >= 90
+                        else '#f59e0b' if score >= 80
+                        else '#fb923c')
                 contact = l['contact_name'] or 'No contact'
-                location = (l['city'] or '') + (', ' + l['state'] if l['state'] else '')
-                if not location.strip(', '):
-                    location = 'Location unknown'
+                loc_parts = [p for p in (l['city'], l['state']) if p]
+                location = ', '.join(loc_parts) or 'Location unknown'
 
-                # Get hook from notes if available
                 hook = ''
-                if l['notes']:
-                    notes_text = l['notes']
-                    if '💡 Hook:' in notes_text:
-                        hook = notes_text.split('💡 Hook:')[1].split('\n')[0].strip()[:120]
+                if l['notes'] and '💡 Hook:' in l['notes']:
+                    hook = l['notes'].split('💡 Hook:')[1].split('\n')[0].strip()[:140]
+                hook_block = (
+                    f"<div style='margin-top:0.55rem;font-size:0.85rem;"
+                    f"color:#cbd5e1;border-left:2px solid {ring}99;"
+                    f"padding:0.1rem 0 0.1rem 0.65rem;font-style:italic;"
+                    f"line-height:1.45'>💡 {hook}…</div>"
+                    if hook else ""
+                )
 
                 st.markdown(f"""
-                <div style='background:#fff;border:1px solid #e9ecef;border-left:4px solid {color};
-                            border-radius:10px;padding:1rem 1.2rem;margin-bottom:0.6rem;
-                            box-shadow:0 1px 3px rgba(0,0,0,0.04)'>
-                    <div style='display:flex;justify-content:space-between;align-items:start;gap:0.5rem'>
+                <div style='position:relative;
+                            background:rgba(15,23,42,0.55);
+                            border:1px solid {ring}40;
+                            border-radius:14px;padding:1.0rem 1.2rem;
+                            margin-bottom:0.6rem;
+                            backdrop-filter:blur(12px);
+                            -webkit-backdrop-filter:blur(12px);
+                            box-shadow:0 4px 14px rgba(15,23,42,0.20)'>
+                    <div style='display:flex;justify-content:space-between;
+                                align-items:flex-start;gap:1rem'>
                         <div style='flex:1;min-width:0'>
-                            <div style='font-weight:700;color:#4d7c0f;font-size:1rem;
-                                        white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>
+                            <div style='font-weight:700;color:#e2e8f0;
+                                        font-size:1.05rem;letter-spacing:-0.01em;
+                                        white-space:nowrap;overflow:hidden;
+                                        text-overflow:ellipsis'>
                                 {l['business_name']}
                             </div>
-                            <div style='color:#6b7280;font-size:0.85rem;margin-top:0.15rem'>
+                            <div style='color:#94a3b8;font-size:0.85rem;
+                                        margin-top:0.22rem'>
                                 {contact} · {location}
                             </div>
-                            {f'<div style="margin-top:0.5rem;font-size:0.85rem;color:#475569;font-style:italic">💡 {hook}...</div>' if hook else ''}
+                            {hook_block}
                         </div>
-                        <div style='background:{color};color:white;padding:0.25rem 0.6rem;
-                                    border-radius:14px;font-weight:700;font-size:0.85rem;
-                                    flex-shrink:0'>{score}</div>
+                        <!-- Score ring (matches the KPI rings + provider rings) -->
+                        <div style='flex-shrink:0;width:56px;height:56px;
+                                    border-radius:50%;
+                                    background:conic-gradient({ring} 0% {score}%,
+                                                              rgba(148,163,184,0.10) {score}% 100%);
+                                    display:flex;align-items:center;
+                                    justify-content:center;
+                                    box-shadow:0 0 14px {ring}55'>
+                            <div style='width:40px;height:40px;border-radius:50%;
+                                        background:#0a0f1c;display:flex;
+                                        align-items:center;justify-content:center'>
+                                <div style='font-family:JetBrains Mono,monospace;
+                                            font-weight:800;font-size:0.95rem;
+                                            color:{ring};line-height:1'>{score}</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                if st.button(f"Open {l['business_name'][:40]}", key=f"home_lead_{l['id']}",
-                              use_container_width=True):
+
+                # Small right-aligned Open button (no more giant full-width button)
+                _spacer, _btn = st.columns([3, 1])
+                if _btn.button("Open →", key=f"home_lead_{l['id']}",
+                                use_container_width=True):
                     st.session_state.viewing_lead_id = l['id']
                     st.session_state.page = "customer_detail"
                     st.rerun()
         else:
             st.markdown("""
-            <div style='background:#f9fafb;border:1px dashed #d1d5db;border-radius:10px;
-                        padding:2rem;text-align:center;color:#6b7280'>
-                <div style='font-size:1.8rem'>🎯</div>
-                <div style='margin-top:0.4rem'>No hot leads yet</div>
-                <div style='font-size:0.85rem;margin-top:0.2rem'>
-                    Run Autopilot to find some
+            <div style='background:rgba(15,23,42,0.40);
+                        border:1px dashed rgba(163,230,53,0.32);
+                        border-radius:14px;padding:2.2rem 2rem;text-align:center;
+                        color:#94a3b8;backdrop-filter:blur(8px);
+                        -webkit-backdrop-filter:blur(8px)'>
+                <div style='font-size:1.9rem;opacity:0.55'>🎯</div>
+                <div style='margin-top:0.55rem;color:#e2e8f0;font-weight:700;
+                            letter-spacing:-0.01em'>No hot leads yet</div>
+                <div style='font-size:0.85rem;margin-top:0.3rem;color:#64748b'>
+                    Run Autopilot to find some.
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
     with col_right:
-        st.markdown("### 📜 Activity")
-        st.caption("Auto-refreshes every 30s")
+        ui_kit.section_header('ACTIVITY · 30s', accent='#06b6d4')
         _home_activity_fragment()
 
 
@@ -2950,39 +2984,62 @@ def _home_kpi_fragment():
 
 @st.fragment(run_every=30)
 def _home_activity_fragment():
-    """Auto-refreshing activity feed for the Home page."""
+    """Auto-refreshing activity feed for the Home page — dark glass entries
+    with semantic left-bar accent + monospace timestamp on the right."""
     activities = database.get_recent_activities(8)
-    if activities:
-        for a in activities:
-            biz = a['business_name'] or 'System'
-            desc = a['description'] or ''
-            time_str = format_date_friendly(a['created_at'])
+    if not activities:
+        st.markdown("""
+        <div style='color:#64748b;font-size:0.86rem;padding:1rem 0.5rem;
+                    text-align:center;font-style:italic'>
+            Activity will appear as you work.
+        </div>
+        """, unsafe_allow_html=True)
+        return
 
-            act_type = a['activity_type'] if 'activity_type' in a.keys() else 'system'
-            act_color = {
-                'autopilot_added': '#28a745',
-                'autopilot_drafted': '#6610f2',
-                'email_sent': '#0ea5e9',
-                'compose_send': '#0ea5e9',
-                'created': '#4d7c0f',
-                'status_change': '#f59e0b',
-                'enrichment': '#8b5cf6',
-                'follow_up': '#fd7e14',
-                'inbound_reply': '#3b82f6',
-                'auto_reply_sent': '#10b981',
-            }.get(act_type, '#6b7280')
+    # Brand-aligned activity colors: cyan family for outbound/system,
+    # lime family for AI/research, warm for status/follow-up.
+    type_color = {
+        'autopilot_added':   '#10b981',
+        'autopilot_drafted': '#a3e635',
+        'email_sent':        '#06b6d4',
+        'compose_send':      '#06b6d4',
+        'created':           '#06b6d4',
+        'status_change':     '#f59e0b',
+        'enrichment':        '#a3e635',
+        'follow_up':         '#fb923c',
+        'inbound_reply':     '#22d3ee',
+        'auto_reply_sent':   '#10b981',
+    }
+    for a in activities:
+        biz = a['business_name'] or 'System'
+        desc = a['description'] or ''
+        time_str = format_date_friendly(a['created_at'])
+        act_type = a['activity_type'] if 'activity_type' in a.keys() else 'system'
+        color = type_color.get(act_type, '#64748b')
 
-            st.html(
-                f"<div style='border-left:3px solid {act_color};padding:0.5rem 0.8rem;"
-                f"background:#fafafa;border-radius:0 6px 6px 0;"
-                f"margin-bottom:0.4rem;font-size:0.85rem'>"
-                f"<div style='font-weight:600;color:#374151'>{biz}</div>"
-                f"<div style='color:#6b7280;font-size:0.82rem;margin-top:0.1rem'>{desc}</div>"
-                f"<div style='color:#9ca3af;font-size:0.75rem;margin-top:0.15rem'>{time_str}</div>"
-                f"</div>"
-            )
-    else:
-        st.caption("_Activity will appear as you work_")
+        st.html(
+            f"<div style='position:relative;"
+            f"background:rgba(15,23,42,0.55);"
+            f"border:1px solid rgba(148,163,184,0.10);"
+            f"border-left:3px solid {color};"
+            f"border-radius:0 10px 10px 0;"
+            f"padding:0.65rem 0.95rem;margin-bottom:0.45rem;"
+            f"backdrop-filter:blur(8px);"
+            f"-webkit-backdrop-filter:blur(8px)'>"
+            f"<div style='display:flex;justify-content:space-between;"
+            f"align-items:flex-start;gap:0.6rem'>"
+            f"<div style='font-weight:700;color:#e2e8f0;font-size:0.88rem;"
+            f"line-height:1.3;min-width:0;flex:1;"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{biz}</div>"
+            f"<div style='color:{color};opacity:0.75;font-size:0.66rem;"
+            f"font-family:JetBrains Mono,monospace;letter-spacing:0.06em;"
+            f"text-transform:uppercase;font-weight:700;flex-shrink:0;"
+            f"white-space:nowrap'>{time_str}</div>"
+            f"</div>"
+            f"<div style='color:#94a3b8;font-size:0.8rem;margin-top:0.2rem;"
+            f"line-height:1.4'>{desc}</div>"
+            f"</div>"
+        )
 
 
 # ===========================================================================
