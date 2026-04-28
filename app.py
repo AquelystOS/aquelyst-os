@@ -209,12 +209,16 @@ st.markdown("""
 <style>
     /* ==================== HIGH-TECH BASE ==================== */
     :root {
-        --bg: #f6f8fb;
-        --surface: rgba(255,255,255,0.72);
+        /* Dark dashboard surface — matches the Today hero so the page reads
+           as one cohesive control panel. Cards remain white-glass to pop
+           cleanly off the dark bg, exactly how the hero floats today. */
+        --bg: #0a0f1c;
+        --surface: rgba(255,255,255,0.92);   /* white card on dark bg */
         --surface-solid: #ffffff;
-        --border: rgba(15,23,42,0.06);
-        --border-strong: rgba(15,23,42,0.12);
-        --ink: #0a0f1c;
+        --border: rgba(148,163,184,0.10);
+        --border-strong: rgba(148,163,184,0.20);
+        --ink: #0a0f1c;                       /* dark text — used inside white cards */
+        --ink-on-bg: #e2e8f0;                /* light text — used on the dark page bg */
         --ink-soft: #475569;
         --ink-muted: #94a3b8;
         /* AqueLyst brand: cyan (Aque) → lime (Lyst). The deep variant is
@@ -228,20 +232,32 @@ st.markdown("""
         --grad-soft: linear-gradient(135deg, rgba(6,182,212,0.10), rgba(163,230,53,0.12));
     }
 
-    /* App background — subtle dot grid for tech feel */
+    /* App background — same gradient as the Today hero so the page bg blends
+       with the hero. Subtle radial cyan / lime washes give depth. */
     .stApp {
         background:
-            radial-gradient(circle at 0% 0%, rgba(6,182,212,0.05) 0%, transparent 40%),
-            radial-gradient(circle at 100% 100%, rgba(26,95,63,0.05) 0%, transparent 40%),
-            var(--bg) !important;
+            radial-gradient(circle at 12% 0%, rgba(6,182,212,0.08) 0%, transparent 40%),
+            radial-gradient(circle at 100% 100%, rgba(163,230,53,0.06) 0%, transparent 42%),
+            linear-gradient(135deg, #0a0f1c 0%, #0f172a 55%, #0a1f24 100%) !important;
     }
     .stApp::before {
         content: "";
         position: fixed; inset: 0;
-        background-image: radial-gradient(circle, rgba(15,23,42,0.04) 1px, transparent 1px);
-        background-size: 24px 24px;
+        background-image: radial-gradient(circle, rgba(148,163,184,0.06) 1px, transparent 1px);
+        background-size: 28px 28px;
         pointer-events: none;
         z-index: 0;
+    }
+    /* Streamlit captions and bare text on the page bg need to be light */
+    .stApp [data-testid="stCaptionContainer"] {
+        color: var(--ink-on-bg) !important;
+        opacity: 0.75;
+    }
+    /* Markdown headings rendered directly on the page bg (outside cards) — light */
+    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h3,
+    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h4,
+    .stApp > div > div > div > [data-testid="stMarkdownContainer"] > h5 {
+        color: var(--ink-on-bg) !important;
     }
 
     .main {padding-top: 0.5rem;}
@@ -1740,13 +1756,13 @@ def show_top_nav():
 
     top_left, top_search, top_right = st.columns([3, 3, 1])
     top_left.html(
-        "<div style='display:flex;align-items:center;gap:0.7rem;padding:0.3rem 0'>"
-        f"{ui_kit.brand_wordmark(size='sm', with_mark=True)}"
-        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-        f"color:#94a3b8;letter-spacing:0.18em;text-transform:uppercase;"
-        f"font-weight:700'>OS</span>"
-        f"<span style='background:{badge_color};color:white;padding:0.2rem 0.7rem;"
-        f"border-radius:12px;font-weight:600;font-size:0.82rem'>"
+        "<div style='display:flex;align-items:center;gap:0.8rem;padding:0.2rem 0'>"
+        f"{ui_kit.brand_wordmark(size='md', with_mark=True)}"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.66rem;"
+        f"color:#94a3b8;letter-spacing:0.20em;text-transform:uppercase;"
+        f"font-weight:700;align-self:center'>OS</span>"
+        f"<span style='background:{badge_color};color:white;padding:0.25rem 0.8rem;"
+        f"border-radius:12px;font-weight:600;font-size:0.85rem;align-self:center'>"
         f"{user_name}{role_html}"
         f"</span></div>"
     )
@@ -2050,10 +2066,11 @@ def onboard_done():
 # HOME (Today)
 # ===========================================================================
 def show_home():
-    hour = datetime.now().hour
+    _et_now = ui_kit.now_et()
+    hour = _et_now.hour
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
-    today_short = datetime.now().strftime("%a · %d %b %Y").upper()
-    now_time = datetime.now().strftime("%H:%M")
+    today_short = _et_now.strftime("%a · %d %b %Y").upper()
+    now_time = _et_now.strftime("%H:%M ET")
 
     stats = database.get_dashboard_stats()
     ap_state = autopilot.get_state()

@@ -1,10 +1,11 @@
 [theme]
-# AqueLyst brand: cyan (Aque) + lime (Lyst). primaryColor drives Streamlit's
+# Dark dashboard surface, matching the Today hero. Cards stay white so they
+# pop cleanly against the dark page bg. primaryColor drives Streamlit's
 # default accents — keep aligned with --accent in app.py.
 primaryColor = "#06b6d4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f8f9fa"
-textColor = "#262730"
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#e2e8f0"
 font = "sans serif"
 
 [server]

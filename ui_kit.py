@@ -11,7 +11,21 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:
+    _ET = None
+
 import streamlit as st
+
+
+def now_et():
+    """Eastern time (handles DST automatically — EST in winter, EDT in summer).
+    Falls back to local time if zoneinfo unavailable."""
+    if _ET is not None:
+        return datetime.now(_ET)
+    return datetime.now()
 
 
 _LOGO_PATH = Path(__file__).parent / "assets" / "aquelyst-logo.png"
@@ -73,8 +87,9 @@ def page_hero(title, subtitle="", stats=None, eyebrow="AQUELYST OS",
                 rendered below the subtitle.
     """
     _ensure_pulse_animation()
-    now_time = datetime.now().strftime("%H:%M")
-    today_short = datetime.now().strftime("%a · %d %b %Y").upper()
+    _now = now_et()
+    now_time = _now.strftime("%H:%M ET")
+    today_short = _now.strftime("%a · %d %b %Y").upper()
 
     stats_html = ""
     if stats:
