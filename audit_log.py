@@ -26,7 +26,7 @@ DB_PATH = "aquelyst_hunter.db"
 
 def _ensure_table():
     """Create audit_log table if missing."""
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +83,7 @@ def _get_local_tz_info():
 def _get_last_hash():
     """Get hash of most recent audit entry (for hash-chain)."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        import db_backend; conn = db_backend.get_connection()
         c = conn.cursor()
         c.execute('SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1')
         row = c.fetchone()
@@ -142,7 +142,7 @@ def log(event_type, action, target_type=None, target_id=None, target_label=None,
     entry_hash = _compute_hash(prev_hash, payload)
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        import db_backend; conn = db_backend.get_connection()
         c = conn.cursor()
         c.execute('''INSERT INTO audit_log
                      (timestamp_utc, timestamp_local, timezone_name, timezone_offset,
@@ -183,7 +183,7 @@ def query(limit=200, event_type=None, actor_email=None, target_type=None, target
     """
     try:
         _ensure_table()
-        conn = sqlite3.connect(DB_PATH)
+        import db_backend; conn = db_backend.get_connection()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 
@@ -230,7 +230,7 @@ def count(event_type=None, since_iso=None):
     """Count entries matching filters."""
     try:
         _ensure_table()
-        conn = sqlite3.connect(DB_PATH)
+        import db_backend; conn = db_backend.get_connection()
         c = conn.cursor()
 
         where = []
@@ -258,7 +258,7 @@ def verify_chain():
     """Walk the entire audit chain and verify hash integrity.
     Returns (is_valid, broken_at_id_or_None)."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        import db_backend; conn = db_backend.get_connection()
         c = conn.cursor()
         c.execute('''SELECT id, timestamp_utc, event_type, action, actor_email,
                             target_type, target_id, details, prev_hash, entry_hash

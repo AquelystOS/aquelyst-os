@@ -691,7 +691,7 @@ def show_admin_console():
 
     sections = st.tabs(["👥 Team", "🛡 Admins", "🔑 API Keys",
                           "🧠 Aqua Memory", "🗑 Junk Patterns",
-                          "💬 Chat Logs", "📊 Usage"])
+                          "💬 Chat Logs", "📊 Usage", "🗄 Database"])
 
     with sections[0]:
         _admin_team_section()
@@ -707,6 +707,79 @@ def show_admin_console():
         _admin_chatlogs_section()
     with sections[6]:
         _admin_usage_section()
+    with sections[7]:
+        _admin_database_section()
+
+
+def _admin_database_section():
+    """Show backend status (SQLite vs Postgres) and migration instructions."""
+    import db_backend
+    st.markdown("##### Database backend")
+
+    ok, kind, detail = db_backend.safe_test_connection()
+    if ok:
+        if kind == 'postgres':
+            st.success(f"✅ **Postgres connected** — {detail}")
+            st.caption("All data persists across redeploys. Multi-tenant ready.")
+        else:
+            st.warning(f"🟡 **{detail}**")
+            st.caption(
+                "Local SQLite — **does NOT persist on Streamlit Cloud redeploys**. "
+                "Set `DATABASE_URL` in Streamlit Cloud secrets to switch to Postgres."
+            )
+    else:
+        st.error(f"❌ {detail}")
+
+    st.markdown("---")
+    with st.expander("📖 How to switch this app to persistent Postgres (Supabase, ~10 min)",
+                       expanded=(kind != 'postgres')):
+        st.markdown("""
+**Step 1 — create a free Supabase Postgres** (or use Neon, Render, etc.)
+
+1. Go to **[https://supabase.com](https://supabase.com)** and sign up (free tier = 500MB, plenty for now)
+2. Click **New project** → name it `aquelyst-os` → set a strong DB password → wait ~2 min while it spins up
+3. In your project: **Settings → Database → Connection string → URI** — copy the long connection string. It looks like:
+
+```
+postgresql://postgres.xxxxxxxx:YOUR-PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+```
+
+**Step 2 — paste it into Streamlit Cloud secrets**
+
+1. Open **[https://share.streamlit.io](https://share.streamlit.io)** → your `aquelyst-os` app → **⋮** → **Settings → Secrets**
+2. Add this line to the existing block (replacing the value):
+
+```toml
+DATABASE_URL = "postgresql://postgres.xxxxxxxx:YOUR-PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+```
+
+3. Save. The app reboots automatically.
+
+**Step 3 — verify**
+
+After the reboot, refresh this Admin → 🗄 Database tab. The status above should now read **✅ Postgres connected**.
+
+**Step 4 (optional) — copy your existing local data into Postgres**
+
+If you have leads/drafts/etc. on your Mac that you want to bring over, run this in your terminal:
+
+```bash
+cd "/Users/debraleblang/Desktop/AqueLyst-Hunter"
+DATABASE_URL='postgresql://...your URL...' python3 migrate_to_postgres.py
+```
+
+It copies every row from your local SQLite to Postgres. Idempotent, safe to re-run.
+
+---
+
+**What changes after this:**
+- Everyone's user accounts persist across redeploys (no more re-creating passwords)
+- All shared baseline API keys persist (no more re-pasting)
+- Aqua's memory + chat history persist
+- Leads, drafts, inbox all persist
+- The team can finally trust the cloud version with real data
+        """)
+        st.caption("ℹ️ Local SQLite continues to work for dev — the app auto-detects which backend to use based on whether `DATABASE_URL` is set.")
 
 
 def _admin_junk_section():

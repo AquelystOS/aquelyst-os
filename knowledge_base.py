@@ -16,7 +16,7 @@ DB_PATH = "aquelyst_hunter.db"
 
 
 def _ensure_table():
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS knowledge_base (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +40,7 @@ def add_document(title, content, source='manual', added_by=None):
         except Exception:
             added_by = 'unknown'
 
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     c = conn.cursor()
     c.execute('''INSERT INTO knowledge_base (title, content, source, added_by)
                  VALUES (?, ?, ?, ?)''', (title, content, source, added_by))
@@ -67,7 +67,7 @@ def add_document(title, content, source='manual', added_by=None):
 
 def list_documents():
     _ensure_table()
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute('SELECT id, title, source, added_by, added_at, usage_count, content FROM knowledge_base ORDER BY id DESC')
@@ -78,7 +78,7 @@ def list_documents():
 
 def get_document(doc_id):
     _ensure_table()
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute('SELECT * FROM knowledge_base WHERE id = ?', (doc_id,))
@@ -89,7 +89,7 @@ def get_document(doc_id):
 
 def delete_document(doc_id):
     _ensure_table()
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     c = conn.cursor()
     c.execute('SELECT title FROM knowledge_base WHERE id = ?', (doc_id,))
     title_row = c.fetchone()
@@ -115,7 +115,7 @@ def delete_document(doc_id):
 def increment_usage(doc_id):
     """Track that a doc was used (so we can see what's actually helping)."""
     _ensure_table()
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     c = conn.cursor()
     c.execute('UPDATE knowledge_base SET usage_count = usage_count + 1 WHERE id = ?', (doc_id,))
     conn.commit()
@@ -154,7 +154,7 @@ def format_for_bot_prompt(max_total_chars=8000):
 def search(query, limit=5):
     """Simple LIKE-based search through knowledge."""
     _ensure_table()
-    conn = sqlite3.connect(DB_PATH)
+    import db_backend; conn = db_backend.get_connection()
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     pat = f'%{query}%'

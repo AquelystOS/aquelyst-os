@@ -1,0 +1,264 @@
+"""Database backend abstraction.
+
+Lets the rest of the app keep using SQLite-style queries (`?` placeholders,
+`sqlite3.Row` row access) while transparently running on Postgres when a
+DATABASE_URL is configured (e.g. Supabase, Neon, Render Postgres).
+
+Detection priority:
+1. `DATABASE_URL` env var
+2. `st.secrets["DATABASE_URL"]`
+3. Otherwise → local SQLite
+
+This means:
+- Local dev: `aquelyst_hunter.db` SQLite, zero config.
+- Streamlit Cloud: set `DATABASE_URL = "postgresql://..."` in Secrets, every read
+  and write hits the persistent Postgres. No code changes needed.
+"""
+
+import os
+import re
+import sqlite3
+from pathlib import Path
+
+
+DB_PATH = "aquelyst_hunter.db"
+
+
+# ============================================================================
+# Detection — is Postgres configured?
+# ============================================================================
+def _get_database_url():
+    url = (os.environ.get('DATABASE_URL') or '').strip()
+    if url:
+        return url
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets'):
+            try:
+                v = st.secrets.get('DATABASE_URL', '') or ''
+                v = v.strip()
+                if v:
+                    return v
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    return None
+
+
+def backend_kind():
+    """Returns 'postgres' or 'sqlite'."""
+    return 'postgres' if _get_database_url() else 'sqlite'
+
+
+# ============================================================================
+# Query translation — SQLite syntax → Postgres syntax
+# ============================================================================
+def _translate_query(q):
+    out = q
+    # Placeholders
+    out = out.replace('?', '%s')
+    # AUTOINCREMENT
+    out = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY',
+                 out, flags=re.IGNORECASE)
+    # Boolean defaults
+    out = re.sub(r'BOOLEAN\s+DEFAULT\s+0', 'BOOLEAN DEFAULT FALSE', out, flags=re.IGNORECASE)
+    out = re.sub(r'BOOLEAN\s+DEFAULT\s+1', 'BOOLEAN DEFAULT TRUE', out, flags=re.IGNORECASE)
+    # SQLite uses INTEGER for boolean-ish columns with 0/1 defaults too
+    # leave those alone — Postgres accepts integers in those columns
+    # datetime intervals
+    out = re.sub(
+        r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*days?'\s*\)",
+        r"(NOW() - INTERVAL '\1 days')", out)
+    out = re.sub(
+        r"datetime\(\s*'now'\s*,\s*'-\s*(\d+)\s*hours?'\s*\)",
+        r"(NOW() - INTERVAL '\1 hours')", out)
+    out = re.sub(r"datetime\(\s*'now'\s*\)", 'NOW()', out)
+    # SQLite ALTER TABLE ADD COLUMN — same syntax in PG
+    return out
+
+
+# ============================================================================
+# Postgres wrapper that mimics sqlite3 API
+# ============================================================================
+class _PgRowDict(dict):
+    """Dict that also supports indexing by integer position so code that does
+    row[0] still works."""
+    def __init__(self, mapping=None):
+        super().__init__(mapping or {})
+        self._values = list(self.values())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            if isinstance(key, int):
+                return self._values[key]
+            return super().get(key, default)
+        except (IndexError, KeyError):
+            return default
+
+
+class _PgCursor:
+    """Wraps psycopg2 cursor with sqlite3-compatible API."""
+    def __init__(self, raw_cursor):
+        self._cursor = raw_cursor
+        self._lastrowid = None
+
+    def execute(self, query, params=()):
+        translated = _translate_query(query)
+        stripped = translated.lstrip().upper()
+
+        # For INSERTs without an explicit RETURNING, try to capture the id
+        if stripped.startswith('INSERT') and 'RETURNING' not in translated.upper():
+            try:
+                augmented = translated.rstrip().rstrip(';') + ' RETURNING id'
+                self._cursor.execute(augmented, params or ())
+                try:
+                    row = self._cursor.fetchone()
+                    if row is not None:
+                        # row may be a tuple or DictRow
+                        try:
+                            self._lastrowid = row['id']
+                        except Exception:
+                            self._lastrowid = row[0]
+                except Exception:
+                    self._lastrowid = None
+                return self
+            except Exception:
+                # Table may not have an `id` column (e.g. provider_connection_log
+                # whose primary key is `provider`). Fall through to plain execute.
+                # We need to rollback the failed statement before retrying.
+                try:
+                    self._cursor.connection.rollback()
+                except Exception:
+                    pass
+
+        self._cursor.execute(translated, params or ())
+        return self
+
+    def fetchall(self):
+        rows = self._cursor.fetchall() or []
+        return [_PgRowDict(r) if isinstance(r, dict) else _PgRowDict(dict(r)) for r in rows]
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return _PgRowDict(row)
+        try:
+            return _PgRowDict(dict(row))
+        except Exception:
+            # Tuple-like (count(*) etc.) — wrap in pseudo-dict that supports int access
+            return _PgRowDict({i: v for i, v in enumerate(row)})
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def close(self):
+        try:
+            self._cursor.close()
+        except Exception:
+            pass
+
+
+class _PgConnection:
+    """Mimics sqlite3.Connection on top of a psycopg2 connection."""
+    def __init__(self, db_url):
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        self._conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        # Auto-commit-friendly: keep manual commits like sqlite
+        self._conn.autocommit = False
+
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, value):
+        # No-op — we always return dict-like rows
+        pass
+
+    def cursor(self):
+        return _PgCursor(self._conn.cursor())
+
+    def execute(self, query, params=()):
+        c = self.cursor()
+        c.execute(query, params)
+        return c
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# Public API
+# ============================================================================
+def get_connection():
+    """Return a db connection. SQLite if no DATABASE_URL, Postgres otherwise."""
+    db_url = _get_database_url()
+    if db_url:
+        return _PgConnection(db_url)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+# ---------------------------------------------------------------------------
+# Exception classes — caller code uses `except db_backend.IntegrityError:`
+# and gets the right exception for either backend.
+# ---------------------------------------------------------------------------
+_pg_integrity = ()
+_pg_operational = ()
+try:
+    import psycopg2  # type: ignore
+    _pg_integrity = (psycopg2.IntegrityError,)
+    _pg_operational = (psycopg2.OperationalError, psycopg2.ProgrammingError)
+except Exception:
+    pass
+
+IntegrityError = (sqlite3.IntegrityError,) + _pg_integrity
+OperationalError = (sqlite3.OperationalError,) + _pg_operational
+
+
+def safe_test_connection():
+    """Return (ok: bool, kind: str, detail: str). For Admin → Database tab."""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        kind = backend_kind()
+        if kind == 'postgres':
+            c.execute("SELECT version()")
+            row = c.fetchone()
+            ver = row[0] if row is not None else 'unknown'
+            conn.close()
+            return True, 'postgres', f"Postgres connected — {str(ver)[:80]}"
+        c.execute("SELECT sqlite_version()")
+        row = c.fetchone()
+        ver = row[0] if row is not None else 'unknown'
+        conn.close()
+        return True, 'sqlite', f"SQLite {ver} (local file: {DB_PATH})"
+    except Exception as e:
+        return False, backend_kind(), f"Connection failed: {e}"

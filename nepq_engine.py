@@ -658,10 +658,9 @@ def chat(messages, prefer='auto', extra_context=''):
 def _build_crm_snapshot():
     """Build a live snapshot of CRM + email stats so Aqua can answer questions about
     'what's working' / 'how are we doing' without the user having to paste data."""
-    import sqlite3
     try:
-        conn = sqlite3.connect('aquelyst_hunter.db')
-        conn.row_factory = sqlite3.Row
+        import db_backend
+        conn = db_backend.get_connection()
         c = conn.cursor()
 
         # Pipeline counts

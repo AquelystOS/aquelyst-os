@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import os
 
+import db_backend  # universal SQLite/Postgres backend
+
 DB_PATH = "aquelyst_hunter.db"
 
 STATUSES = [
@@ -34,8 +36,10 @@ BUSINESS_TYPES = [
 ]
 
 def init_db():
-    """Initialize SQLite database with schema."""
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize the database with schema. Works on both SQLite and Postgres
+    via the db_backend abstraction layer."""
+    import db_backend
+    conn = db_backend.get_connection()
     c = conn.cursor()
 
     c.execute('''CREATE TABLE IF NOT EXISTS leads (
@@ -130,7 +134,7 @@ def init_db():
                                 ('junk_reason', 'TEXT')]:
         try:
             c.execute(f'ALTER TABLE inbound_messages ADD COLUMN {col_name} {col_def}')
-        except sqlite3.OperationalError:
+        except db_backend.OperationalError:
             pass
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)')
@@ -243,7 +247,7 @@ def init_db():
         try:
             c.execute(f'ALTER TABLE provider_connection_log ADD COLUMN {col} '
                       f'{"INTEGER DEFAULT 0" if col != "last_used_at" else "TEXT"}')
-        except sqlite3.OperationalError:
+        except db_backend.OperationalError:
             pass  # column already exists
 
     conn.commit()
@@ -302,7 +306,7 @@ def aqua_remember_fact(user_email, fact, category=None):
                      VALUES (?,?,?)''', (user_email.lower(), fact, category))
         conn.commit()
         new_id = c.lastrowid
-    except sqlite3.IntegrityError:
+    except db_backend.IntegrityError:
         new_id = None
     conn.close()
     return new_id
@@ -816,7 +820,7 @@ def save_inbound_message(lead_id, from_email, from_name, to_email, subject, body
         new_id = c.lastrowid
         conn.close()
         return new_id
-    except sqlite3.IntegrityError:
+    except db_backend.IntegrityError:
         # Already saved (duplicate message_id)
         conn.close()
         return None
@@ -1121,7 +1125,7 @@ def add_to_suppression(email, reason="manual"):
         c.execute('UPDATE leads SET opt_out = 1, status = "opted_out" WHERE email = ?', (email,))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except db_backend.IntegrityError:
         return False
     finally:
         conn.close()
@@ -1218,10 +1222,10 @@ def update_drafts_with_lead_changes(lead_id):
     pass
 
 def get_connection():
-    """Get SQLite connection."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Get a database connection — Postgres if DATABASE_URL is configured,
+    otherwise local SQLite. The connection mimics sqlite3 API either way."""
+    import db_backend
+    return db_backend.get_connection()
 
 def add_lead(business_name, contact_name=None, email=None, phone=None, website=None,
              social_url=None, city=None, state=None, business_type=None, lead_source=None,
@@ -1254,7 +1258,7 @@ def add_lead(business_name, contact_name=None, email=None, phone=None, website=N
             pass
 
         return lead_id
-    except sqlite3.IntegrityError:
+    except db_backend.IntegrityError:
         conn.close()
         return None
 
