@@ -565,8 +565,13 @@ st.markdown("""
     ::-webkit-scrollbar-thumb:hover { background: rgba(15,23,42,0.3); }
 
     /* ==================== MOBILE / TABLET RESPONSIVE ====================
-       Strictly @media-scoped — desktop layout untouched. iPhones (390px),
-       small Androids (360px), and tablets in portrait (~768px) all adapt. */
+       Strictly @media-scoped — desktop layout untouched. Conservative
+       approach: only style/size tweaks, no aggressive layout rewrites
+       (those caused viewport-jitter feedback loops). Streamlit's native
+       column responsiveness handles wrapping. */
+
+    /* Stop horizontal scrollbar from jittering the viewport on iPhone */
+    html, body { overflow-x: hidden; }
 
     /* Tablets in portrait + large phones */
     @media (max-width: 768px) {
@@ -577,71 +582,27 @@ st.markdown("""
             max-width: 100% !important;
         }
 
-        /* ======= FORCE-STACK st.columns ON MOBILE BY DEFAULT =======
-           Streamlit columns squish ugly on phones. Wrap every horizontal
-           block onto multiple rows with each column taking full width. */
-        [data-testid="stHorizontalBlock"] {
-            flex-wrap: wrap !important;
-            gap: 0.5rem !important;
-        }
-        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
-            flex: 1 1 100% !important;
-            min-width: 0 !important;
-            width: 100% !important;
+        /* Disable the fade-up entry animation on mobile — it re-triggers
+           every time a st.fragment re-renders (every 5/30s), creating the
+           visual "bouncing" effect Danielle reported. */
+        .stApp [data-testid="stVerticalBlock"] > div {
+            animation: none !important;
         }
 
-        /* ======= EXCEPTION: Top toolbar (logo + search + signout) =======
-           Identified via the unique placeholder text on the search input.
-           This works regardless of Streamlit's DOM nesting. */
-
-        /* The horizontal block CONTAINING the search input becomes a 2-track
-           grid: logo on left, signout on right, search hidden. */
-        [data-testid="stHorizontalBlock"]:has(input[placeholder*="Search leads"]) {
-            flex-wrap: nowrap !important;
-            display: grid !important;
-            grid-template-columns: 1fr auto !important;
-            gap: 0.5rem !important;
-            align-items: center !important;
-        }
-        [data-testid="stHorizontalBlock"]:has(input[placeholder*="Search leads"])
-          > [data-testid="column"] {
-            flex: unset !important;
-            width: auto !important;
-            min-width: 0 !important;
-        }
-        /* Hide the column that holds the search input itself */
-        [data-testid="column"]:has(input[placeholder*="Search leads"]) {
-            display: none !important;
-        }
-        /* Compact the user badge so the long "Joseph Dimartino · CEO" pill
-           doesn't push the logo off-screen on iPhone */
+        /* User badge pill (the lime "Joseph Dimartino · CEO" tag) — compact
+           so a long name + role can't push the logo off-screen. */
         [style*="background:#4d7c0f"][style*="border-radius:12px"][style*="font-size:0.85rem"] {
             font-size: 0.7rem !important;
-            padding: 0.18rem 0.55rem !important;
-            max-width: 50vw !important;
+            padding: 0.18rem 0.5rem !important;
+            max-width: 38vw !important;
             white-space: nowrap !important;
             overflow: hidden !important;
             text-overflow: ellipsis !important;
         }
 
-        /* ======= EXCEPTION: Nav buttons row =======
-           Identified by column count (6+). The only horizontal block in
-           the OS that has that many columns is the navigation. Becomes a
-           2-column grid so 6-7 buttons stack as 3 rows of 2 + maybe one
-           solo, instead of being either pancaked horizontally (illegible)
-           or stacked one-per-row (eats half the screen). */
-        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(6)) {
-            flex-wrap: nowrap !important;
-            display: grid !important;
-            grid-template-columns: repeat(2, 1fr) !important;
-            gap: 0.4rem !important;
-            align-items: stretch !important;
-        }
-        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(6))
-          > [data-testid="column"] {
-            flex: unset !important;
-            width: auto !important;
-            min-width: 0 !important;
+        /* Search input shorter so it fits when squished alongside logo */
+        input[placeholder*="Search leads"] {
+            font-size: 0.85rem !important;
         }
 
         /* Heroes — squeeze padding + corner radius */
