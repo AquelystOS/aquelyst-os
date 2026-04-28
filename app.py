@@ -41,54 +41,137 @@ st.set_page_config(
 # PASSWORD GATE — protect the public URL when deployed to Streamlit Cloud
 # Set TEAM_PASSWORD in .streamlit/secrets.toml or skip in dev (no password set)
 # ============================================================================
+ROOT_ADMIN_EMAIL_LOGIN = 'joseph@aquelyst.com'  # always-allowed root admin
+
+
+# Initialize database BEFORE any login flow — login itself reads from DB
+if "db_initialized" not in st.session_state:
+    database.init_db()
+    st.session_state.db_initialized = True
+
+
 def _check_password():
-    """Returns True if user has entered the correct team password (or no password set in dev)."""
+    """Two-stage gate:
+    1) Team password (one shared password gates the URL — protects from random visitors)
+    2) Per-user login (each team member has their own email + password)
+
+    Sets st.session_state.logged_in_user_email when login is complete.
+    Returns True only when both gates have been passed.
+    """
     import hmac
 
-    # Try to read team password from secrets (cloud) — if not set, skip the gate (dev mode)
+    # Get team password
     try:
         team_password = st.secrets.get("TEAM_PASSWORD", "")
     except Exception:
         team_password = ""
 
-    if not team_password:
-        return True  # Dev mode — no password required
+    # Stage 1: team password (skipped in dev mode if no team password set)
+    team_ok = st.session_state.get("team_password_ok", False) or not team_password
+    if not team_ok:
+        st.html(
+            "<div style='max-width:480px;margin:4rem auto 1rem;text-align:center'>"
+            "<div style='font-size:3rem'>🐴</div>"
+            "<h1 style='color:#0f172a !important;font-size:2rem;margin:0.5rem 0'>AqueLyst OS</h1>"
+            "<div style='color:#64748b'>Step 1 of 2 — team access password</div>"
+            "</div>"
+        )
+        with st.form("team_pw_form", clear_on_submit=True):
+            entered = st.text_input("Team password", type="password",
+                                     placeholder="•••••••",
+                                     label_visibility="collapsed")
+            ok = st.form_submit_button("Continue →", type="primary",
+                                         use_container_width=True)
+        if ok:
+            if hmac.compare_digest(entered, team_password):
+                st.session_state.team_password_ok = True
+                st.rerun()
+            else:
+                st.error("❌ Wrong team password")
+        return False
 
-    if st.session_state.get("password_correct", False):
+    # Stage 2: per-user login
+    if st.session_state.get("logged_in_user_email"):
         return True
 
-    def password_entered():
-        if hmac.compare_digest(st.session_state.get("password_input", ""), team_password):
-            st.session_state["password_correct"] = True
-            # Don't keep the plaintext in session
-            st.session_state.pop("password_input", None)
-        else:
-            st.session_state["password_correct"] = False
+    import team as _team
+    members = _team.load_team()
 
-    # Login screen
     st.html(
-        "<div style='max-width:480px;margin:4rem auto 1rem;text-align:center'>"
+        "<div style='max-width:560px;margin:3rem auto 1rem;text-align:center'>"
         "<div style='font-size:3rem'>🐴</div>"
-        "<h1 style='color:#0f172a !important;font-size:2rem;margin:0.5rem 0'>AqueLyst OS</h1>"
-        "<div style='color:#64748b'>Enter the team password to continue</div>"
+        "<h1 style='color:#0f172a !important;font-size:2rem;margin:0.5rem 0'>"
+        "Welcome to AqueLyst OS</h1>"
+        "<div style='color:#64748b'>Step 2 of 2 — sign in with your AqueLyst email</div>"
         "</div>"
     )
-    st.text_input("Team password", type="password", on_change=password_entered,
-                  key="password_input", placeholder="••••••••",
-                  label_visibility="collapsed")
-    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-        st.error("❌ Incorrect password — try again")
+
+    # Login mode: existing user enters email + password.
+    # If no account yet, they set one (only Joseph or anyone added by admin can do this).
+    member_options = [(m['email'], f"{m.get('name', '?')} ({m['email']})")
+                       for m in members if m.get('email')]
+    member_options.append(('__custom__', 'Other email (not on team list yet)'))
+
+    with st.container(border=True):
+        st.markdown("##### Sign in")
+        with st.form("user_login_form"):
+            sel = st.selectbox("Who are you?", member_options,
+                                format_func=lambda o: o[1])
+            custom_email = ""
+            if sel and sel[0] == '__custom__':
+                custom_email = st.text_input("Your email")
+            chosen_email = (custom_email or sel[0]).strip().lower() if sel else ''
+
+            if chosen_email and chosen_email != '__custom__':
+                has_account = database.user_account_exists(chosen_email)
+            else:
+                has_account = False
+
+            if has_account:
+                pw = st.text_input("Your password", type="password",
+                                    placeholder="•••••••")
+                login_btn = st.form_submit_button("Log in →", type="primary",
+                                                    use_container_width=True)
+                if login_btn:
+                    if database.user_check_password(chosen_email, pw):
+                        st.session_state.logged_in_user_email = chosen_email
+                        database.user_record_login(chosen_email)
+                        st.rerun()
+                    else:
+                        st.error("❌ Wrong password for that account")
+            else:
+                st.caption(f"_No account yet for `{chosen_email or '...'}` — set one now._")
+                pw1 = st.text_input("Choose a password (min 6 chars)",
+                                     type="password",
+                                     placeholder="•••••••")
+                pw2 = st.text_input("Confirm password", type="password",
+                                     placeholder="•••••••")
+                set_btn = st.form_submit_button("Create my account →",
+                                                  type="primary",
+                                                  use_container_width=True)
+                if set_btn:
+                    if not chosen_email or chosen_email == '__custom__':
+                        st.error("Pick your email first.")
+                    elif len(pw1) < 6:
+                        st.error("Password must be at least 6 characters.")
+                    elif pw1 != pw2:
+                        st.error("Passwords don't match.")
+                    else:
+                        database.user_set_password(chosen_email, pw1)
+                        st.session_state.logged_in_user_email = chosen_email
+                        database.user_record_login(chosen_email)
+                        st.success(f"✅ Account created for {chosen_email}")
+                        st.rerun()
+
+    st.caption(
+        "Need to reset your password? Ask Joseph (root admin) to wipe it for you "
+        "in 🛡 Admin → 👥 Team."
+    )
     return False
 
 
 if not _check_password():
     st.stop()
-
-
-# Initialize database once
-if "db_initialized" not in st.session_state:
-    database.init_db()
-    st.session_state.db_initialized = True
 
 
 # ===========================================================================
@@ -665,10 +748,19 @@ def _admin_team_section():
     st.markdown("##### Team members")
     members = _team.load_team()
     for i, m in enumerate(members):
-        c1, c2, c3 = st.columns([2, 3, 1])
+        c1, c2, c3, c4 = st.columns([2, 3, 1, 1])
         c1.markdown(f"**{m.get('name', '—')}**")
         c2.markdown(f"`{m.get('email', '—')}` · {m.get('role') or m.get('short_role') or '—'}")
-        if c3.button("Remove", key=f"adm_rm_{i}"):
+        if c3.button("Reset PW", key=f"adm_resetpw_{i}",
+                      help="Wipe their password — they set a new one on next login"):
+            try:
+                if m.get('email'):
+                    database.user_delete_account(m['email'])
+                    st.toast(f"Reset password for {m['email']}", icon="🔑")
+                    st.rerun()
+            except Exception as e:
+                st.error(str(e))
+        if c4.button("Remove", key=f"adm_rm_{i}"):
             try:
                 _team.delete_member(i)
                 st.rerun()
@@ -1169,18 +1261,21 @@ def show_top_nav():
     role_html = (f"<span style='opacity:0.85;font-weight:400'> · {user_role}</span>"
                  if user_role else "")
 
-    st.html(
-        "<div style='display:flex;justify-content:space-between;align-items:center;"
-        "padding:0.3rem 0 0.5rem 0;border-bottom:1px solid #f1f5f9;margin-bottom:0.6rem'>"
+    top_left, top_right = st.columns([5, 1])
+    top_left.html(
+        "<div style='display:flex;align-items:center;gap:0.6rem;padding:0.3rem 0'>"
         "<div style='font-size:0.85rem;color:#64748b'>🐴 <b>AqueLyst OS</b></div>"
-        f"<div style='display:flex;align-items:center;gap:0.5rem;font-size:0.82rem'>"
-        f"<span style='color:#94a3b8'>Logged in as</span>"
         f"<span style='background:{badge_color};color:white;padding:0.2rem 0.7rem;"
-        f"border-radius:12px;font-weight:600'>"
+        f"border-radius:12px;font-weight:600;font-size:0.82rem'>"
         f"{user_name}{role_html}"
-        f"</span>"
-        f"</div></div>"
+        f"</span></div>"
     )
+    if top_right.button("🚪 Sign out", key="signout_btn", use_container_width=True):
+        st.session_state.pop('logged_in_user_email', None)
+        st.session_state.pop('team_password_ok', None)
+        st.rerun()
+    st.markdown("<div style='border-bottom:1px solid #f1f5f9;margin:0 0 0.6rem 0'></div>",
+                 unsafe_allow_html=True)
 
     nav_items = [
         ("🚀 Operations", "operations"),

@@ -169,11 +169,51 @@ def delete_member(index):
 
 
 def get_current_user():
-    """Auto-detect the currently-logged-in user from the connected SMTP email.
+    """Determine the currently-logged-in user.
 
-    Returns the team member whose email matches the SMTP config, or a fallback dict.
+    Priority:
+    1. Streamlit session_state.logged_in_user_email (set by the per-user login flow)
+    2. The connected SMTP email (legacy fallback for code paths that pre-date login)
+    3. Generic fallback
     """
+    # 1. Session-state-driven login (the new way)
     try:
+        import streamlit as _st
+        email = (_st.session_state.get('logged_in_user_email') or '').lower()
+        if email:
+            member = get_member_by_email(email)
+            if member:
+                return member
+            return {
+                'name': email.split('@')[0].title(),
+                'email': email,
+                'role': 'Team member',
+                'short_role': 'AqueLyst',
+                'bio': '',
+                'aliases': [],
+                'company': 'AqueLyst',
+                '_unknown': True,
+            }
+    except Exception:
+        pass
+
+    # 2. Legacy: SMTP-config-based detection (per-user SMTP via DB, then global file)
+    try:
+        import database as _db
+        # Try logged-in user's per-user SMTP config first
+        try:
+            import streamlit as _st
+            email = (_st.session_state.get('logged_in_user_email') or '').lower()
+            if email:
+                cfg = _db.smtp_get(email)
+                if cfg and cfg.get('smtp_email'):
+                    member = get_member_by_email(cfg['smtp_email'])
+                    if member:
+                        return member
+        except Exception:
+            pass
+
+        # Fall back to the global smtp_config.json
         import smtp_sender
         cfg = smtp_sender.load_smtp_config()
         if cfg:
@@ -181,7 +221,6 @@ def get_current_user():
             member = get_member_by_email(user_email)
             if member:
                 return member
-            # Not in team list — return a generic identity from config
             sender_name = cfg.get('sender_name', user_email.split('@')[0].title())
             return {
                 'name': sender_name,
@@ -196,7 +235,6 @@ def get_current_user():
     except Exception:
         pass
 
-    # Final fallback
     return {
         'name': 'AqueLyst Team',
         'email': '',

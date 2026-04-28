@@ -198,6 +198,32 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    # Per-user authentication — each team member has their own password.
+    # Stored as PBKDF2-hashed with a per-user salt (no plaintext).
+    c.execute('''CREATE TABLE IF NOT EXISTS user_accounts (
+        email TEXT PRIMARY KEY,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        last_login TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Per-user SMTP config — each user connects their own email.
+    # Replaces the old global smtp_config.json so logins don't share senders.
+    c.execute('''CREATE TABLE IF NOT EXISTS user_smtp_configs (
+        user_email TEXT PRIMARY KEY,
+        provider TEXT,
+        smtp_server TEXT,
+        smtp_port INTEGER,
+        smtp_email TEXT,
+        smtp_app_password_b64 TEXT,
+        imap_server TEXT,
+        imap_port INTEGER,
+        use_tls INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     # Connection-test history + request counters per baseline provider.
     # Used both for showing "connected" status AND for load-balancing across providers.
     c.execute('''CREATE TABLE IF NOT EXISTS provider_connection_log (
@@ -449,6 +475,183 @@ def admin_is_granted(user_email):
     found = c.fetchone() is not None
     conn.close()
     return found
+
+
+# ============================================================================
+# Per-user authentication
+# ============================================================================
+def _hash_password(password, salt=None):
+    """PBKDF2-HMAC-SHA256, 200k iterations. Returns (hash_b64, salt_b64)."""
+    import hashlib
+    import os
+    import base64
+    if salt is None:
+        salt_bytes = os.urandom(16)
+    else:
+        salt_bytes = base64.b64decode(salt)
+    h = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'),
+                              salt_bytes, 200000)
+    return base64.b64encode(h).decode(), base64.b64encode(salt_bytes).decode()
+
+
+def user_set_password(email, password):
+    """Create or update a user account with the given password."""
+    if not email or not password:
+        return False
+    pwd_hash, salt = _hash_password(password)
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO user_accounts (email, password_hash, salt)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(email) DO UPDATE SET
+                   password_hash = excluded.password_hash,
+                   salt = excluded.salt''',
+              (email.lower(), pwd_hash, salt))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def user_check_password(email, password):
+    """Verify a user's password. Returns True/False."""
+    if not email or not password:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT password_hash, salt FROM user_accounts WHERE email = ?',
+              (email.lower(),))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return False
+    expected_hash = row['password_hash']
+    salt = row['salt']
+    actual_hash, _ = _hash_password(password, salt=salt)
+    import hmac as _hmac
+    return _hmac.compare_digest(expected_hash, actual_hash)
+
+
+def user_account_exists(email):
+    if not email:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM user_accounts WHERE email = ?', (email.lower(),))
+    found = c.fetchone() is not None
+    conn.close()
+    return found
+
+
+def user_record_login(email):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('UPDATE user_accounts SET last_login = CURRENT_TIMESTAMP '
+              'WHERE email = ?', (email.lower(),))
+    conn.commit()
+    conn.close()
+
+
+def user_delete_account(email):
+    """Wipes the password — they have to set a new one next login."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM user_accounts WHERE email = ?', (email.lower(),))
+    conn.commit()
+    conn.close()
+
+
+# ============================================================================
+# Per-user SMTP configs
+# ============================================================================
+def smtp_save(user_email, config):
+    """Save SMTP config for a user. config is a dict with keys:
+    provider, server, port, email, app_password (raw), imap_server, imap_port, use_tls."""
+    import base64
+    if not user_email:
+        return False
+    raw_pw = config.get('app_password') or config.get('smtp_app_password_b64', '')
+    # If they passed already-encoded password (legacy), keep it; else encode now
+    if raw_pw and not config.get('skip_encode'):
+        try:
+            base64.b64decode(raw_pw, validate=True)
+            encoded_pw = raw_pw  # already b64
+        except Exception:
+            encoded_pw = base64.b64encode(raw_pw.encode()).decode()
+    else:
+        encoded_pw = raw_pw
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''INSERT INTO user_smtp_configs
+                 (user_email, provider, smtp_server, smtp_port, smtp_email,
+                   smtp_app_password_b64, imap_server, imap_port, use_tls,
+                   updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 ON CONFLICT(user_email) DO UPDATE SET
+                   provider = excluded.provider,
+                   smtp_server = excluded.smtp_server,
+                   smtp_port = excluded.smtp_port,
+                   smtp_email = excluded.smtp_email,
+                   smtp_app_password_b64 = excluded.smtp_app_password_b64,
+                   imap_server = excluded.imap_server,
+                   imap_port = excluded.imap_port,
+                   use_tls = excluded.use_tls,
+                   updated_at = CURRENT_TIMESTAMP''',
+              (user_email.lower(),
+                config.get('provider'),
+                config.get('server') or config.get('smtp_server'),
+                config.get('port') or config.get('smtp_port'),
+                config.get('email') or config.get('smtp_email'),
+                encoded_pw,
+                config.get('imap_server'),
+                config.get('imap_port'),
+                1 if config.get('use_tls', True) else 0))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def smtp_get(user_email):
+    """Get SMTP config for a user. Returns dict or None.
+    Returns app_password as decoded plaintext for use in smtplib."""
+    import base64
+    if not user_email:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM user_smtp_configs WHERE user_email = ?',
+              (user_email.lower(),))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    cfg = dict(row)
+    if cfg.get('smtp_app_password_b64'):
+        try:
+            cfg['app_password'] = base64.b64decode(
+                cfg['smtp_app_password_b64']).decode()
+        except Exception:
+            cfg['app_password'] = ''
+    return cfg
+
+
+def smtp_delete(user_email):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM user_smtp_configs WHERE user_email = ?',
+              (user_email.lower(),))
+    conn.commit()
+    conn.close()
+
+
+def smtp_list_all():
+    """Admin view: every user with a connected SMTP."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT user_email, provider, smtp_email, updated_at
+                 FROM user_smtp_configs ORDER BY updated_at DESC''')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
 
 
 def admin_list():
