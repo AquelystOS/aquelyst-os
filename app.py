@@ -324,10 +324,16 @@ st.markdown("""
         color: #e2e8f0;
     }
     /* Streamlit widget labels (text_input / selectbox / radio / checkbox /
-       slider) sit above the widget on the page bg — light. */
+       slider) sit above the widget on the page bg — light. The * descendant
+       selectors catch the inner <div>/<p>/<span> Streamlit puts the actual
+       visible text in. Brighter slate-200 instead of slate-300 so they pop. */
     .stApp label,
-    .stApp [data-testid="stWidgetLabel"] {
-        color: #cbd5e1 !important;
+    .stApp label *,
+    .stApp [data-testid="stWidgetLabel"],
+    .stApp [data-testid="stWidgetLabel"] *,
+    .stApp [data-testid="stWidgetLabel"] p,
+    .stApp [data-testid="stWidgetLabel"] div {
+        color: #e2e8f0 !important;
     }
 
     /* OVERRIDE — DARK text inside white card containers */
@@ -1013,14 +1019,14 @@ def show_admin_console():
         return
 
     import team as _team
-    st.html(
-        "<div style='display:flex;align-items:center;gap:0.7rem;margin-bottom:1rem'>"
-        "<div style='font-size:2rem'>🛡️</div>"
-        "<div>"
-        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;letter-spacing:0.08em;font-weight:700'>"
-        "ADMIN CONSOLE</div>"
-        "<div style='font-size:1.6rem;font-weight:800;color:#0a0f1c'>Run AqueLyst OS</div>"
-        "</div></div>"
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Run</span> AqueLyst OS",
+        subtitle="Team management, admin grants, API key pool, Aqua's "
+                  "memory + chat logs, junk patterns, usage stats, and the "
+                  "raw database tab — all in one console.",
+        eyebrow="🛡 ADMIN CONSOLE",
     )
 
     sections = st.tabs(["👥 Team", "🛡 Admins", "🔑 API Keys",
