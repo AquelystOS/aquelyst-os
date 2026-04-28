@@ -1354,10 +1354,20 @@ def _admin_admins_section():
         return
 
     st.html(
-        f"<div style='background:rgba(6,182,212,0.08);border-left:3px solid #06b6d4;"
-        f"padding:0.7rem 1rem;border-radius:6px;margin-bottom:1rem'>"
-        f"<strong style='color:#0a0f1c'>👑 Root admin:</strong> "
-        f"<code>{ROOT_ADMIN_EMAIL}</code> (Joseph) — always admin, cannot be removed."
+        f"<div style='background:linear-gradient(135deg,rgba(6,182,212,0.12),"
+        f"rgba(163,230,53,0.06));border:1px solid rgba(6,182,212,0.35);"
+        f"border-radius:10px;padding:0.85rem 1.1rem;margin-bottom:1rem'>"
+        f"<div style='display:flex;align-items:center;gap:0.55rem;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.66rem;"
+        f"color:#a3e635;letter-spacing:0.18em;text-transform:uppercase;"
+        f"font-weight:700;margin-bottom:0.35rem'>"
+        f"<span>👑</span><span>◢ ROOT ADMIN</span></div>"
+        f"<div style='color:#e2e8f0;font-size:0.95rem;font-weight:600'>"
+        f"<code style='background:rgba(6,182,212,0.14);color:#a3e635;"
+        f"padding:0.1rem 0.5rem;border-radius:4px;font-family:JetBrains Mono,"
+        f"monospace'>{ROOT_ADMIN_EMAIL}</code> "
+        f"<span style='color:#cbd5e1'>(Joseph) — always admin, cannot be "
+        f"removed.</span></div>"
         f"</div>"
     )
 
