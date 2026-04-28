@@ -236,8 +236,16 @@ def normalize_opportunity(opp):
     if fpath:
         agency = fpath.split('.')[-1].strip()
 
+    notice_id = opp.get('noticeId', '') or ''
+    # SAM.gov's `uiLink` is sometimes empty or points to an API URL. The
+    # public-facing URL pattern that always works is /opp/{noticeId}/view.
+    public_url = (
+        f"https://sam.gov/opp/{notice_id}/view"
+        if notice_id else (opp.get('uiLink') or '')
+    )
+
     return {
-        'external_id': opp.get('noticeId', '') or '',
+        'external_id': notice_id,
         'source': 'sam.gov',
         'title': (opp.get('title') or '')[:500],
         'agency': agency[:200],
@@ -249,7 +257,7 @@ def normalize_opportunity(opp):
         'contact_email': (poc.get('email') or '')[:200],
         'contact_name': (poc.get('fullName') or '')[:200],
         'contact_phone': (poc.get('phone') or '')[:50],
-        'url': opp.get('uiLink', '') or '',
+        'url': public_url,
     }
 
 

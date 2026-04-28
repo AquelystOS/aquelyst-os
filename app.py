@@ -1623,38 +1623,53 @@ def _render_bid_opportunity_card(opp):
 
         # Actions
         st.markdown("---")
+        # Open-link uses link_button so it actually navigates in a new tab
         ac1, ac2, ac3, ac4, ac5 = st.columns(5)
-        if ac1.button("🌐 Open on SAM.gov", key=f"bid_open_{opp['id']}",
-                       use_container_width=True):
-            st.markdown(f"[Click to open]({opp.get('url', '#')})", unsafe_allow_html=True)
+        url = opp.get('url') or '#'
+        with ac1:
+            st.link_button("🌐 Open on SAM.gov", url, use_container_width=True)
         if ac2.button("📥 Add to CRM as lead", key=f"bid_to_crm_{opp['id']}",
                        use_container_width=True):
             if opp.get('contact_email'):
-                lead_id = database.add_lead({
-                    'business_name': opp.get('agency') or opp.get('title', '')[:80],
-                    'contact_name': opp.get('contact_name', ''),
-                    'email': opp.get('contact_email'),
-                    'phone': opp.get('contact_phone', ''),
-                    'business_type': f"federal procurement ({opp.get('naics', '')})",
-                    'lead_source': 'bid_intelligence',
-                    'product_fit': opp.get('product_fit'),
-                    'pain_hypothesis': f"Federal RFP for {product.lower()}-related work",
-                    'message': opp.get('match_reasoning'),
-                    'notes': f"From SAM.gov bid {opp.get('external_id')}\n\n"
-                              f"Title: {opp.get('title')}\n"
-                              f"Agency: {opp.get('agency')}\n"
-                              f"Deadline: {opp.get('deadline')}\n\n"
-                              f"{(opp.get('description') or '')[:1500]}",
-                    'lead_score': score,
-                })
-                if lead_id:
-                    database.update_bid_opportunity(opp['id'], status='pursuing')
-                    st.success(f"✅ Added to CRM as lead #{lead_id}")
-                    st.rerun()
-                else:
-                    st.warning("Lead with that email already in CRM.")
+                try:
+                    biz_name = opp.get('agency') or (opp.get('title') or '')[:80]
+                    pain = f"Federal RFP for {product.lower()}-related work"
+                    notes = (
+                        f"From SAM.gov bid {opp.get('external_id')}\n\n"
+                        f"Title: {opp.get('title')}\n"
+                        f"Agency: {opp.get('agency')}\n"
+                        f"Deadline: {opp.get('deadline')}\n"
+                        f"URL: {opp.get('url')}\n\n"
+                        f"{(opp.get('description') or '')[:1500]}"
+                    )
+                    lead_id = database.add_lead(
+                        business_name=biz_name,
+                        contact_name=opp.get('contact_name') or None,
+                        email=opp.get('contact_email'),
+                        phone=opp.get('contact_phone') or None,
+                        business_type=f"federal procurement ({opp.get('naics', '')})",
+                        lead_source='bid_intelligence',
+                        product_fit=opp.get('product_fit'),
+                        pain_hypothesis=pain,
+                        message=opp.get('match_reasoning'),
+                        notes=notes,
+                    )
+                    if lead_id:
+                        # Score the lead with the bid's match score
+                        try:
+                            database.update_lead(lead_id, lead_score=int(score),
+                                                 status='interested')
+                        except Exception:
+                            pass
+                        database.update_bid_opportunity(opp['id'], status='pursuing')
+                        st.success(f"✅ Added to CRM as lead #{lead_id}")
+                        st.rerun()
+                    else:
+                        st.warning("Lead with that email is already in CRM.")
+                except Exception as e:
+                    st.error(f"Couldn't add to CRM: {e}")
             else:
-                st.error("No contact email — can't auto-create a CRM lead.")
+                st.error("No contact email on this bid — can't auto-create a CRM lead.")
         if ac3.button("👀 Mark reviewing", key=f"bid_review_{opp['id']}",
                        use_container_width=True):
             database.update_bid_opportunity(opp['id'], status='reviewing')
