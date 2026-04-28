@@ -200,40 +200,84 @@ def _strip_quoted_reply(body):
 PROCESSED_FILE = "processed_message_ids.json"
 
 
-def _load_processed_ids():
-    """Load set of Message-IDs we've already processed."""
+def _load_processed_ids(user_email=None):
+    """Load set of Message-IDs we've already processed for one user.
+
+    File format is a dict {user_email: [list of ids]}. The legacy flat-list
+    format is auto-migrated under '__legacy__' on first save. If user_email
+    is None, returns the union across all users (used for global dedup
+    when iterating multiple inboxes in one cycle)."""
     if not Path(PROCESSED_FILE).exists():
         return set()
     try:
         with open(PROCESSED_FILE) as f:
-            return set(json.load(f))
+            data = json.load(f)
+        if isinstance(data, list):
+            # legacy format — preserved for backward compat
+            return set(data)
+        if user_email:
+            return set(data.get(user_email.lower(), []))
+        out = set()
+        for v in data.values():
+            if isinstance(v, list):
+                out.update(v)
+        return out
     except Exception:
         return set()
 
 
-def _save_processed_ids(ids):
-    """Persist processed Message-ID set (cap at 5000 entries)."""
+def _save_processed_ids(ids, user_email=None):
+    """Persist processed Message-IDs (cap each user's list at 5000 entries).
+    Reads the existing file to preserve OTHER users' entries when updating
+    one user's list."""
     try:
-        # Keep newest 5000
-        ids_list = list(ids)[-5000:]
+        existing = {}
+        if Path(PROCESSED_FILE).exists():
+            try:
+                with open(PROCESSED_FILE) as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    existing = raw
+                elif isinstance(raw, list):
+                    existing = {'__legacy__': raw}
+            except Exception:
+                pass
+        key = user_email.lower() if user_email else '__legacy__'
+        existing[key] = list(ids)[-5000:]
         with open(PROCESSED_FILE, 'w') as f:
-            json.dump(ids_list, f)
+            json.dump(existing, f)
     except Exception:
         pass
 
 
-def fetch_unread_messages():
-    """Connect to IMAP and fetch messages from leads.
+def fetch_unread_messages(user_email=None):
+    """Connect to IMAP and fetch messages from leads for ONE user's inbox.
 
-    For Gmail, searches [Gmail]/All Mail (catches self-replies which never hit INBOX).
-    Falls back to INBOX otherwise.
-    Filters out already-processed messages and bot's own outbound emails.
+    user_email: which team member's inbox to poll. If None, falls back to
+    the current logged-in user (legacy callers). New callers should pass
+    user_email explicitly so the multi-tenant watcher can iterate all
+    connected users.
 
-    Returns: list of dicts with {message_id, from_email, from_name, subject, date, body}
+    For Gmail, searches [Gmail]/All Mail (catches self-replies which never
+    hit INBOX). Falls back to INBOX otherwise. Filters out already-processed
+    messages and the bot's own outbound emails.
+
+    Returns: list of dicts with {message_id, from_email, from_name,
+    subject, date, body}, plus the user_email the message was found in.
     """
-    smtp_cfg = smtp_sender.load_smtp_config()
-    if not smtp_cfg:
-        return [], "Email not configured"
+    if user_email:
+        cfg = database.smtp_get(user_email)
+        if not cfg or not cfg.get('smtp_email'):
+            return [], f"No SMTP saved for {user_email}"
+        smtp_cfg = {
+            'provider': cfg.get('provider', 'gmail'),
+            'email': cfg['smtp_email'],
+            'app_password': cfg.get('app_password', ''),
+        }
+    else:
+        smtp_cfg = smtp_sender.load_smtp_config()
+        if not smtp_cfg:
+            return [], "Email not configured"
 
     provider = smtp_cfg['provider']
     if provider not in IMAP_PRESETS:
@@ -250,7 +294,7 @@ def fetch_unread_messages():
     else:
         folder = 'INBOX'
 
-    processed_ids = _load_processed_ids()
+    processed_ids = _load_processed_ids(bot_email)
 
     try:
         mail = imaplib.IMAP4_SSL(preset['server'], preset['port'])
@@ -339,7 +383,7 @@ def fetch_unread_messages():
         # Save outbound message IDs as processed (so we never reprocess)
         if new_processed:
             processed_ids.update(new_processed)
-            _save_processed_ids(processed_ids)
+            _save_processed_ids(processed_ids, bot_email)
 
         mail.logout()
         return messages, None
@@ -381,8 +425,12 @@ def get_conversation_history(lead_id):
     return conversation
 
 
-def process_unread_message(msg, auto_send=False):
+def process_unread_message(msg, auto_send=False, watcher_user=None):
     """Handle a single unread message: classify, draft reply, optionally send.
+
+    `watcher_user` is the team member whose inbox the message arrived in —
+    used for assigned_to attribution + per-user processed-id tracking.
+    Defaults to None (legacy behavior; the global processed list).
 
     EVERY email is recorded to the activity log (even skipped ones) so the user
     has a complete inbox audit trail.
@@ -394,9 +442,9 @@ def process_unread_message(msg, auto_send=False):
     # Mark processed up front so we never re-handle this message
     rfc_msg_id = msg.get('message_id', '')
     if rfc_msg_id:
-        processed = _load_processed_ids()
+        processed = _load_processed_ids(watcher_user)
         processed.add(rfc_msg_id)
-        _save_processed_ids(processed)
+        _save_processed_ids(processed, watcher_user)
 
     # Always log that we saw this email (responder log + audit log)
     log_event('seen',
@@ -665,30 +713,79 @@ def process_unread_message(msg, auto_send=False):
 
 
 def run_one_check():
-    """Run a single inbox check cycle."""
+    """Run a single inbox check cycle for EVERY user with SMTP configured.
+    Each user's inbox is polled independently with their own credentials and
+    their own processed-message-id list. Inbound messages are tagged with
+    assigned_to=<that user> so replies route to whoever owns the thread."""
     update_state(last_check=datetime.now().isoformat())
-    log_event('check_start', "🔍 Checking inbox for new replies...")
 
-    messages, error = fetch_unread_messages()
+    # Build the list of inboxes to poll. Prefer the per-user SMTP table
+    # (multi-tenant). Fall back to the legacy global config for back-compat
+    # (dev mode / pre-multi-tenant setups).
+    users = []
+    try:
+        users = database.smtp_list_all() or []
+    except Exception:
+        users = []
 
-    if error:
-        log_event('error', f"Inbox check failed: {error}")
-        increment_stat('errors')
+    if not users:
+        # Legacy single-inbox path
+        log_event('check_start', "🔍 Checking inbox for new replies (legacy)...")
+        messages, error = fetch_unread_messages()
+        if error:
+            log_event('error', f"Inbox check failed: {error}")
+            increment_stat('errors')
+            return
+        log_event('check_done', f"Found {len(messages)} unread")
+        increment_stat('checks_completed')
+        state = get_state()
+        auto_send = state.get('auto_reply_mode') == 'send'
+        for msg in messages:
+            try:
+                increment_stat('emails_processed')
+                process_unread_message(msg, auto_send=auto_send)
+            except Exception as e:
+                log_event('error', f"Failed to process: {str(e)[:100]}")
+                increment_stat('errors')
         return
 
-    log_event('check_done', f"Found {len(messages)} unread messages")
-    increment_stat('checks_completed')
-
+    # Multi-user path — iterate every connected inbox
     state = get_state()
     auto_send = state.get('auto_reply_mode') == 'send'
+    total_msgs = 0
+    log_event('check_start', f"🔍 Polling {len(users)} inbox(es)...")
 
-    for msg in messages:
+    for u in users:
+        watcher = u.get('user_email')
+        if not watcher:
+            continue
         try:
-            increment_stat('emails_processed')
-            process_unread_message(msg, auto_send=auto_send)
+            messages, error = fetch_unread_messages(watcher)
         except Exception as e:
-            log_event('error', f"Failed to process message from {msg.get('from_email', '?')}: {str(e)[:100]}")
+            log_event('error', f"❌ {watcher}: {str(e)[:100]}")
             increment_stat('errors')
+            continue
+        if error:
+            log_event('error', f"❌ {watcher}: {error}")
+            increment_stat('errors')
+            continue
+        if messages:
+            log_event('found', f"📬 {watcher} → {len(messages)} new")
+        total_msgs += len(messages)
+        for msg in messages:
+            try:
+                increment_stat('emails_processed')
+                process_unread_message(msg, auto_send=auto_send,
+                                        watcher_user=watcher)
+            except Exception as e:
+                log_event('error',
+                           f"Failed to process from {msg.get('from_email','?')}: "
+                           f"{str(e)[:100]}")
+                increment_stat('errors')
+
+    log_event('check_done',
+               f"Polled {len(users)} inbox(es), found {total_msgs} new")
+    increment_stat('checks_completed')
 
 
 def responder_loop():
