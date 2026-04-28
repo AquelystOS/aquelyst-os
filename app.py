@@ -110,9 +110,9 @@ def _check_password():
         "</div>"
     )
 
-    member_options = [(m['email'], f"{m.get('name', '?')} ({m['email']})")
-                       for m in members if m.get('email')]
-    member_options.append(('__custom__', 'Other email (not on team list yet)'))
+    member_rows = [(m['email'].lower(), m.get('name', '?'),
+                     m.get('short_role') or m.get('role', ''))
+                    for m in members if m.get('email')]
 
     just_created = st.session_state.get('just_created_account')
     if just_created:
@@ -121,19 +121,50 @@ def _check_password():
             f"Now sign in with your new password to confirm."
         )
 
-    # Step A: pick your email (outside the form so the form rerenders correctly
-    # when the user selects a different person)
-    sel = st.selectbox(
-        "Who are you?", member_options,
-        format_func=lambda o: o[1],
-        key="login_pick_user",
-        index=next((i for i, (e, _) in enumerate(member_options)
-                     if e == (just_created or '').lower()), 0),
+    # Step A: pick your email — TAP-FRIENDLY BUTTON GRID instead of selectbox.
+    # Streamlit's selectbox with tuple options has known iOS Safari bugs where
+    # tapping an option doesn't register a value change. Buttons sidestep that
+    # entirely and feel native on phones.
+    picked = (st.session_state.get('login_picked_email')
+              or (just_created or '').lower()
+              or '')
+
+    st.html(
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.66rem;"
+        "color:#94a3b8;letter-spacing:0.16em;text-transform:uppercase;"
+        "font-weight:700;text-align:center;margin:0.5rem 0 0.6rem'>"
+        "◢ TAP YOUR NAME"
+        "</div>"
     )
+    for email, name, role in member_rows:
+        is_picked = picked == email
+        label = f"{'✅  ' if is_picked else ''}{name}"
+        if role:
+            label += f" · {role}"
+        if st.button(
+            label,
+            key=f"login_pick_{email}",
+            use_container_width=True,
+            type='primary' if is_picked else 'secondary',
+        ):
+            st.session_state.login_picked_email = email
+            st.rerun()
+
+    # Custom email path (someone not on the official team list yet)
+    if st.button(
+        "✏️ Other email (not on team list yet)",
+        key="login_pick_custom",
+        use_container_width=True,
+        type='primary' if picked == '__custom__' else 'secondary',
+    ):
+        st.session_state.login_picked_email = '__custom__'
+        st.rerun()
+
     custom_email = ""
-    if sel and sel[0] == '__custom__':
+    if picked == '__custom__':
         custom_email = st.text_input("Your email", key="login_custom_email")
-    chosen_email = (custom_email or (sel[0] if sel else '')).strip().lower()
+
+    chosen_email = (custom_email or picked or '').strip().lower()
     if chosen_email == '__custom__':
         chosen_email = ''
 
