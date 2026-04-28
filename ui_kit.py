@@ -55,7 +55,7 @@ def _ensure_pulse_animation():
     global _PULSE_KEYFRAMES_INJECTED
     if _PULSE_KEYFRAMES_INJECTED:
         return
-    st.markdown("""
+    st.html("""
     <style>
         @keyframes aqp-pulse {
             0%,100% { opacity: 1; transform: scale(1); }
@@ -66,7 +66,7 @@ def _ensure_pulse_animation():
             to   { transform: rotate(360deg); }
         }
     </style>
-    """, unsafe_allow_html=True)
+    """)
     _PULSE_KEYFRAMES_INJECTED = True
 
 
@@ -138,7 +138,7 @@ def page_hero(title, subtitle="", stats=None, eyebrow="AQUELYST OS",
         if subtitle else ""
     )
 
-    st.markdown(f"""
+    st.html(f"""
     <div style='position:relative;
                 background:linear-gradient(135deg,#0a0f1c 0%,#0f172a 55%,#0a1f24 100%);
                 border-radius:18px;padding:1.5rem 2.0rem;margin-bottom:1.4rem;
@@ -173,12 +173,12 @@ def page_hero(title, subtitle="", stats=None, eyebrow="AQUELYST OS",
             {stats_html}
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def section_header(label, accent='#06b6d4'):
     """Cyan-accented section divider with monospace ◢ marker."""
-    st.markdown(f"""
+    st.html(f"""
     <div style='display:flex;align-items:center;gap:0.8rem;margin:1.4rem 0 0.7rem'>
         <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;
                     letter-spacing:0.20em;color:#475569;text-transform:uppercase;
@@ -186,7 +186,7 @@ def section_header(label, accent='#06b6d4'):
         <div style='flex:1;height:1px;background:linear-gradient(90deg,
                     {accent}55 0%, {accent}00 100%)'></div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def status_pill_html(text, status='ok', mono=True):
@@ -215,7 +215,7 @@ def status_pill_html(text, status='ok', mono=True):
 
 def glass_card(content_html, accent='#06b6d4', padding='1.4rem 1.8rem'):
     """Render a glass panel with subtle accent border + inner content as HTML."""
-    st.markdown(f"""
+    st.html(f"""
     <div style='position:relative;
                 background:linear-gradient(135deg,
                     rgba({_hex_to_rgb(accent)},0.06) 0%,
@@ -226,12 +226,12 @@ def glass_card(content_html, accent='#06b6d4', padding='1.4rem 1.8rem'):
                 box-shadow:0 4px 24px rgba({_hex_to_rgb(accent)},0.06)'>
         {content_html}
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def empty_state(icon, title, body, accent='#06b6d4'):
     """Glass empty-state panel with icon, title, body."""
-    st.markdown(f"""
+    st.html(f"""
     <div style='position:relative;text-align:center;
                 background:linear-gradient(135deg,
                     rgba({_hex_to_rgb(accent)},0.05) 0%,
@@ -245,7 +245,7 @@ def empty_state(icon, title, body, accent='#06b6d4'):
         <div style='color:#475569;font-size:0.9rem;margin-top:0.35rem;
                     max-width:480px;margin-left:auto;margin-right:auto'>{body}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def _hex_to_rgb(hex_color):
@@ -369,6 +369,5 @@ def brand_wordmark(size='md', show_subtitle=False, on_dark=False, with_mark=True
 
 def render_brand_wordmark(size='md', show_subtitle=False, on_dark=False, with_mark=True):
     """Render the wordmark directly to the active Streamlit container."""
-    st.markdown(brand_wordmark(size=size, show_subtitle=show_subtitle,
-                                on_dark=on_dark, with_mark=with_mark),
-                 unsafe_allow_html=True)
+    st.html(brand_wordmark(size=size, show_subtitle=show_subtitle,
+                            on_dark=on_dark, with_mark=with_mark))
