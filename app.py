@@ -71,10 +71,12 @@ def _check_password():
     team_ok = st.session_state.get("team_password_ok", False) or not team_password
     if not team_ok:
         st.html(
-            "<div style='max-width:480px;margin:4rem auto 1rem;text-align:center'>"
-            "<div style='font-size:3rem'>🐴</div>"
-            "<h1 style='color:#0f172a !important;font-size:2rem;margin:0.5rem 0'>AqueLyst OS</h1>"
-            "<div style='color:#64748b'>Step 1 of 2 — team access password</div>"
+            "<div style='max-width:560px;margin:4rem auto 1.2rem;text-align:center'>"
+            f"<div style='display:inline-block'>{ui_kit.brand_wordmark(size='lg', show_subtitle=True)}</div>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+            "color:#64748b;letter-spacing:0.20em;text-transform:uppercase;"
+            "font-weight:700;margin-top:1.5rem'>"
+            "◢ STEP 1 OF 2 · TEAM ACCESS PASSWORD</div>"
             "</div>"
         )
         with st.form("team_pw_form", clear_on_submit=True):
@@ -99,11 +101,12 @@ def _check_password():
     members = _team.load_team()
 
     st.html(
-        "<div style='max-width:560px;margin:3rem auto 1rem;text-align:center'>"
-        "<div style='font-size:3rem'>🐴</div>"
-        "<h1 style='color:#0f172a !important;font-size:2rem;margin:0.5rem 0'>"
-        "Welcome to AqueLyst OS</h1>"
-        "<div style='color:#64748b'>Step 2 of 2 — sign in with your AqueLyst email</div>"
+        "<div style='max-width:580px;margin:3rem auto 1.2rem;text-align:center'>"
+        f"<div style='display:inline-block'>{ui_kit.brand_wordmark(size='lg', show_subtitle=True)}</div>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+        "color:#64748b;letter-spacing:0.20em;text-transform:uppercase;"
+        "font-weight:700;margin-top:1.5rem'>"
+        "◢ STEP 2 OF 2 · SIGN IN WITH YOUR AQUELYST EMAIL</div>"
         "</div>"
     )
 
@@ -202,7 +205,7 @@ if not _check_password():
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&family=Playfair+Display:wght@700;800;900&display=swap" rel="stylesheet">
 <style>
     /* ==================== HIGH-TECH BASE ==================== */
     :root {
@@ -1737,8 +1740,11 @@ def show_top_nav():
 
     top_left, top_search, top_right = st.columns([3, 3, 1])
     top_left.html(
-        "<div style='display:flex;align-items:center;gap:0.6rem;padding:0.3rem 0'>"
-        "<div style='font-size:0.85rem;color:#64748b'>🐴 <b>AqueLyst OS</b></div>"
+        "<div style='display:flex;align-items:center;gap:0.7rem;padding:0.3rem 0'>"
+        f"{ui_kit.brand_wordmark(size='sm', with_mark=True)}"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+        f"color:#94a3b8;letter-spacing:0.18em;text-transform:uppercase;"
+        f"font-weight:700'>OS</span>"
         f"<span style='background:{badge_color};color:white;padding:0.2rem 0.7rem;"
         f"border-radius:12px;font-weight:600;font-size:0.82rem'>"
         f"{user_name}{role_html}"

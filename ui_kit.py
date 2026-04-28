@@ -218,3 +218,95 @@ def _hex_to_rgb(hex_color):
     if len(h) == 3:
         h = ''.join(c*2 for c in h)
     return f"{int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)}"
+
+
+# ============================================================================
+# AqueLyst brand wordmark — inline SVG/HTML recreation of the company logo.
+# Cyan "Aque" + lime "Lyst" with the molecular dot/curve mark on the left,
+# rendered in Playfair Display serif. No image file required — pure vector.
+# ============================================================================
+def brand_wordmark(size='md', show_subtitle=False, on_dark=False, with_mark=True):
+    """Render the AqueLyst inline logo as an HTML string (returned, not printed).
+
+    Args:
+        size: 'sm' (24px), 'md' (40px), 'lg' (72px), 'xl' (104px)
+        show_subtitle: show "ODOR ELIMINATING TECHNOLOGY" tagline below
+        on_dark: True if rendering on a dark surface — adapts subtitle color
+        with_mark: include the molecular dot pattern to the left of the wordmark
+    """
+    sizes = {'sm': 24, 'md': 40, 'lg': 72, 'xl': 104}
+    font_px = sizes.get(size, 40)
+    mark_px = int(font_px * 1.5)
+
+    # Molecular dot pattern — cyan + lime dots scattered along a swirling
+    # path, mimicking the company logo's dotted swirl
+    mark_html = ""
+    if with_mark:
+        mark_html = (
+            f'<svg width="{mark_px}" height="{mark_px}" viewBox="0 0 60 60" '
+            'style="vertical-align:middle;flex-shrink:0;display:inline-block">'
+            '<path d="M 6 16 Q 18 10 24 22 T 14 38 Q 22 46 36 42 Q 48 38 50 26"'
+            ' stroke="#a3e635" stroke-width="1" fill="none" opacity="0.45"/>'
+            '<circle cx="6"  cy="16" r="2.4" fill="#a3e635"/>'
+            '<circle cx="13" cy="11" r="1.8" fill="#06b6d4"/>'
+            '<circle cx="19" cy="16" r="3.0" fill="#a3e635"/>'
+            '<circle cx="24" cy="22" r="2.0" fill="#06b6d4"/>'
+            '<circle cx="14" cy="28" r="2.6" fill="#a3e635"/>'
+            '<circle cx="9"  cy="34" r="1.8" fill="#06b6d4"/>'
+            '<circle cx="14" cy="38" r="3.2" fill="#a3e635"/>'
+            '<circle cx="22" cy="44" r="2.0" fill="#06b6d4"/>'
+            '<circle cx="30" cy="40" r="2.4" fill="#a3e635"/>'
+            '<circle cx="36" cy="42" r="1.8" fill="#06b6d4"/>'
+            '<circle cx="44" cy="36" r="2.6" fill="#a3e635"/>'
+            '<circle cx="50" cy="26" r="2.0" fill="#06b6d4"/>'
+            '<circle cx="42" cy="22" r="1.6" fill="#a3e635"/>'
+            '<circle cx="36" cy="14" r="2.0" fill="#06b6d4"/>'
+            '<circle cx="29" cy="9"  r="1.6" fill="#a3e635"/>'
+            '</svg>'
+        )
+
+    tm_html = (
+        f'<sup style="font-family:Inter,sans-serif;font-size:{int(font_px*0.22)}px;'
+        f'color:#06b6d4;font-weight:600;margin-left:2px;'
+        f'background:#06b6d4;color:#fff;padding:0 4px;border-radius:50%;'
+        f'display:inline-block;width:{int(font_px*0.30)}px;'
+        f'height:{int(font_px*0.30)}px;line-height:{int(font_px*0.30)}px;'
+        f'text-align:center;vertical-align:super">TM</sup>'
+        if size in ('lg', 'xl') else
+        f'<sup style="font-family:Inter,sans-serif;font-size:{int(font_px*0.30)}px;'
+        f'color:#06b6d4;font-weight:500;margin-left:1px;vertical-align:super">™</sup>'
+    )
+
+    subtitle_html = ""
+    if show_subtitle:
+        sub_color = '#94a3b8' if on_dark else '#64748b'
+        sub_size = max(8, int(font_px * 0.16))
+        subtitle_html = (
+            f'<div style="font-family:Inter,sans-serif;font-size:{sub_size}px;'
+            f'color:{sub_color};letter-spacing:0.22em;font-weight:600;'
+            f'text-transform:uppercase;margin-top:{max(2,int(font_px*0.05))}px;'
+            f'line-height:1">ODOR ELIMINATING TECHNOLOGY</div>'
+        )
+
+    return (
+        f'<div style="display:inline-flex;align-items:center;gap:0.5rem;'
+        f'line-height:1">'
+        f'{mark_html}'
+        f'<div style="display:inline-block">'
+        f'<div style="font-family:\'Playfair Display\',Georgia,\'Times New Roman\',serif;'
+        f'font-size:{font_px}px;font-weight:700;letter-spacing:-0.01em;'
+        f'line-height:1;white-space:nowrap">'
+        f'<span style="color:#06b6d4">Aque</span>'
+        f'<span style="color:#a3e635">Lyst</span>'
+        f'{tm_html}'
+        f'</div>'
+        f'{subtitle_html}'
+        f'</div></div>'
+    )
+
+
+def render_brand_wordmark(size='md', show_subtitle=False, on_dark=False, with_mark=True):
+    """Render the wordmark directly to the active Streamlit container."""
+    st.markdown(brand_wordmark(size=size, show_subtitle=show_subtitle,
+                                on_dark=on_dark, with_mark=with_mark),
+                 unsafe_allow_html=True)
