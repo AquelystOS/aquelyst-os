@@ -218,7 +218,9 @@ def _check_password():
                         import audit_log as _al
                         _al.log('user_signup',
                                  f"New account created: {chosen_email}",
-                                 actor=chosen_email)
+                                 target_type='team_member',
+                                 target_label=chosen_email,
+                                 details={'email': chosen_email})
                     except Exception:
                         pass
                     # Don't auto-login. Force them to log in with the new password
@@ -1386,11 +1388,20 @@ def _admin_team_section():
     # PENDING TEAMMATES — surfaced FIRST so admins notice new sign-ups
     # ============================================================
     if pending:
-        st.markdown("##### 🆕 New sign-ins not on the official roster")
-        st.caption(f"{len(pending)} user{'s' if len(pending) != 1 else ''} "
-                    "signed in via the 'Other email' path. Promote them to the "
-                    "roster to add a real name, role, and bio so Aqua signs "
-                    "their emails properly.")
+        st.html(
+            "<div style='display:flex;align-items:center;gap:0.6rem;"
+            "margin:0.5rem 0 0.4rem'>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+            "color:#a3e635;letter-spacing:0.18em;text-transform:uppercase;"
+            "font-weight:700'>◢ NEW SIGN-INS · "
+            f"{len(pending)} pending</div>"
+            "<div style='flex:1;height:1px;background:linear-gradient(90deg,"
+            "rgba(163,230,53,0.40),rgba(163,230,53,0))'></div></div>"
+            "<div style='color:#cbd5e1;font-size:0.85rem;line-height:1.4;"
+            "margin-bottom:0.8rem'>Signed in via the 'Other email' path. "
+            "Promote them to the roster to add a real name, role, and bio so "
+            "Aqua signs their emails properly.</div>"
+        )
         for i, m in enumerate(pending):
             with st.container(border=True):
                 c1, c2 = st.columns([3, 2])
@@ -1429,7 +1440,9 @@ def _admin_team_section():
                             import audit_log as _al
                             _al.log('team_promote',
                                      f"Promoted {m['email']} to official roster as "
-                                     f"{p_name} ({p_role})")
+                                     f"{p_name} ({p_role})",
+                                     target_type='team_member',
+                                     target_label=m['email'])
                         except Exception:
                             pass
                         st.toast(f"✅ {p_name} added to roster", icon="🎉")
@@ -1448,35 +1461,58 @@ def _admin_team_section():
     # ============================================================
     # OFFICIAL ROSTER
     # ============================================================
-    st.markdown("##### Team members (official roster)")
+    st.html(
+        "<div style='display:flex;align-items:center;gap:0.6rem;"
+        "margin:1.0rem 0 0.5rem'>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+        "color:#06b6d4;letter-spacing:0.18em;text-transform:uppercase;"
+        "font-weight:700'>◢ OFFICIAL ROSTER · "
+        f"{len(roster)}</div>"
+        "<div style='flex:1;height:1px;background:linear-gradient(90deg,"
+        "rgba(6,182,212,0.40),rgba(6,182,212,0))'></div></div>"
+    )
     for i, m in enumerate(roster):
-        c1, c2, c3, c4 = st.columns([2, 3, 1, 1])
-        c1.markdown(f"**{m.get('name', '—')}**")
-        c2.markdown(f"`{m.get('email', '—')}` · {m.get('role') or m.get('short_role') or '—'}")
-        if c3.button("Reset PW", key=f"adm_resetpw_{i}",
-                      help="Wipe their password — they set a new one on next login"):
-            try:
-                if m.get('email'):
-                    database.user_delete_account(m['email'])
-                    st.toast(f"Reset password for {m['email']}", icon="🔑")
-                    st.rerun()
-            except Exception as e:
-                st.error(str(e))
-        if c4.button("Remove", key=f"adm_rm_{i}"):
-            try:
-                _team.delete_member(i)
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
+        with st.container(border=True):
+            row1, row2 = st.columns([5, 2])
+            with row1:
+                st.markdown(f"**{m.get('name', '—')}**  ·  `{m.get('email', '—')}`")
+                st.caption(m.get('role') or m.get('short_role') or '—')
+            with row2:
+                bc1, bc2 = st.columns(2)
+                if bc1.button("🔑 Reset PW", key=f"adm_resetpw_{i}",
+                               use_container_width=True,
+                               help="Wipe their password — they set a new one on next login"):
+                    try:
+                        if m.get('email'):
+                            database.user_delete_account(m['email'])
+                            st.toast(f"Reset password for {m['email']}", icon="🔑")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
+                if bc2.button("🗑 Remove", key=f"adm_rm_{i}",
+                               use_container_width=True):
+                    try:
+                        _team.delete_member(i)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
 
-    st.markdown("---")
-    st.markdown("##### Add team member manually")
+    st.html(
+        "<div style='display:flex;align-items:center;gap:0.6rem;"
+        "margin:1.2rem 0 0.5rem'>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+        "color:#94a3b8;letter-spacing:0.18em;text-transform:uppercase;"
+        "font-weight:700'>◢ ADD MEMBER MANUALLY</div>"
+        "<div style='flex:1;height:1px;background:linear-gradient(90deg,"
+        "rgba(148,163,184,0.30),rgba(148,163,184,0))'></div></div>"
+    )
     with st.form("admin_add_member"):
         c1, c2, c3 = st.columns([2, 2, 2])
         n = c1.text_input("Full name")
         e = c2.text_input("Email")
         r = c3.text_input("Role")
-        if st.form_submit_button("➕ Add"):
+        if st.form_submit_button("➕ Add", type="primary",
+                                  use_container_width=True):
             if n and e:
                 try:
                     _team.add_member(name=n, email=e, role=r or '')
