@@ -189,8 +189,11 @@ class _PgConnection:
         import psycopg2
         from psycopg2.extras import RealDictCursor
         self._conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-        # Auto-commit-friendly: keep manual commits like sqlite
-        self._conn.autocommit = False
+        # Autocommit: each statement is its own transaction. Avoids
+        # InFailedSqlTransaction poisoning when an idempotent schema upgrade
+        # (ALTER TABLE ADD COLUMN on a fresh DB) fails. Trade-off: multi-statement
+        # atomicity is lost, but none of our code relies on rollback recovery.
+        self._conn.autocommit = True
 
     @property
     def row_factory(self):
