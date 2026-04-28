@@ -591,51 +591,57 @@ st.markdown("""
         }
 
         /* ======= EXCEPTION: Top toolbar (logo + search + signout) =======
-           Mobile: hide the search bar entirely, keep logo on the left and
-           a small signout button on the right. Identified via the marker
-           div inside its dedicated st.container(). */
-        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
-          > [data-testid="stHorizontalBlock"] {
+           Identified via the unique placeholder text on the search input.
+           This works regardless of Streamlit's DOM nesting. */
+
+        /* The horizontal block CONTAINING the search input becomes a 2-track
+           grid: logo on left, signout on right, search hidden. */
+        [data-testid="stHorizontalBlock"]:has(input[placeholder*="Search leads"]) {
             flex-wrap: nowrap !important;
             display: grid !important;
             grid-template-columns: 1fr auto !important;
             gap: 0.5rem !important;
+            align-items: center !important;
         }
-        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
-          > [data-testid="stHorizontalBlock"]
+        [data-testid="stHorizontalBlock"]:has(input[placeholder*="Search leads"])
           > [data-testid="column"] {
             flex: unset !important;
             width: auto !important;
+            min-width: 0 !important;
         }
-        /* Hide the middle column (search bar) on mobile */
-        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
-          > [data-testid="stHorizontalBlock"]
-          > [data-testid="column"]:nth-child(2) {
+        /* Hide the column that holds the search input itself */
+        [data-testid="column"]:has(input[placeholder*="Search leads"]) {
             display: none !important;
         }
-        /* Compact the right column (signout button) so it stays small */
-        [data-testid="stVerticalBlock"]:has(> div .aqp-toprow-marker)
-          > [data-testid="stHorizontalBlock"]
-          > [data-testid="column"]:nth-child(3) {
-            justify-self: end !important;
+        /* Compact the user badge so the long "Joseph Dimartino · CEO" pill
+           doesn't push the logo off-screen on iPhone */
+        [style*="background:#4d7c0f"][style*="border-radius:12px"][style*="font-size:0.85rem"] {
+            font-size: 0.7rem !important;
+            padding: 0.18rem 0.55rem !important;
+            max-width: 50vw !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
         }
 
         /* ======= EXCEPTION: Nav buttons row =======
-           7 buttons would stack to 7 rows under the global rule — that's
-           too much vertical space. Instead, make it a 2-column grid so
-           it becomes 4 rows of 2 (or 3+3+1 if 6 buttons). */
-        [data-testid="stVerticalBlock"]:has(> div .aqp-navrow-marker)
-          > [data-testid="stHorizontalBlock"] {
+           Identified by column count (6+). The only horizontal block in
+           the OS that has that many columns is the navigation. Becomes a
+           2-column grid so 6-7 buttons stack as 3 rows of 2 + maybe one
+           solo, instead of being either pancaked horizontally (illegible)
+           or stacked one-per-row (eats half the screen). */
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(6)) {
             flex-wrap: nowrap !important;
             display: grid !important;
             grid-template-columns: repeat(2, 1fr) !important;
             gap: 0.4rem !important;
+            align-items: stretch !important;
         }
-        [data-testid="stVerticalBlock"]:has(> div .aqp-navrow-marker)
-          > [data-testid="stHorizontalBlock"]
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(6))
           > [data-testid="column"] {
             flex: unset !important;
             width: auto !important;
+            min-width: 0 !important;
         }
 
         /* Heroes — squeeze padding + corner radius */
