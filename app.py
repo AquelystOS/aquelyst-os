@@ -1225,6 +1225,16 @@ def _admin_keys_section():
             'signup_url': 'https://brave.com/search/api/',
             'key_prefix': 'BSA',
         },
+        {
+            'id': 'sam_gov',
+            'name': 'SAM.gov',
+            'tier': 'FREE',
+            'tier_color': '#16a34a',
+            'note': 'Federal contract opportunities (RFPs, RFQs, sources-sought) — required for the Bid Intelligence tab. Free key from GSA.',
+            'keys_url': 'https://open.gsa.gov/api/get-opportunities-public-api/',
+            'signup_url': 'https://sam.gov/content/api',
+            'key_prefix': '',
+        },
     ]
     for prov in DISCOVERY_PROVIDERS:
         pid = prov['id']
@@ -1397,20 +1407,16 @@ def _admin_usage_section():
 
 
 def show_operations():
-    """Unified Operations hub: Today / Autopilot / Sales Bot in one place."""
+    """Unified Operations hub: Today / Autopilot / Sales Bot / Bids in one place."""
     sub = st.session_state.setdefault('ops_subpage', 'today')
 
-    # Sub-nav pill bar
-    st.html(
-        "<div style='display:flex;gap:0.4rem;background:rgba(255,255,255,0.7);"
-        "backdrop-filter:blur(12px);border:1px solid rgba(15,23,42,0.08);"
-        "padding:0.35rem;border-radius:14px;margin-bottom:1.2rem;width:fit-content'>"
-        "<style>.ops-active{background:linear-gradient(135deg,#06b6d4,#1a5f3f) !important;"
-        "color:white !important;box-shadow:0 2px 8px rgba(6,182,212,0.25)}</style>"
-        "</div>"
-    )
-    sub_cols = st.columns([1, 1, 1, 5])
-    options = [('today', '🏠 Today'), ('autopilot', '🤖 Autopilot'), ('sales_bot', '🎯 Sales Bot')]
+    sub_cols = st.columns([1, 1, 1, 1, 4])
+    options = [
+        ('today', '🏠 Today'),
+        ('autopilot', '🤖 Autopilot'),
+        ('sales_bot', '🎯 Sales Bot'),
+        ('bids', '💰 Bids'),
+    ]
     for i, (key, label) in enumerate(options):
         with sub_cols[i]:
             is_active = sub == key
@@ -1425,8 +1431,210 @@ def show_operations():
         show_autopilot()
     elif sub == 'sales_bot':
         show_sales_bot()
+    elif sub == 'bids':
+        show_bid_opportunities()
     else:
         show_home()
+
+
+def show_bid_opportunities():
+    """💰 Bid Opportunities — federal procurement intelligence."""
+    import bid_intelligence
+
+    st.html(
+        "<div style='margin-bottom:1.2rem'>"
+        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;"
+        "letter-spacing:0.08em;font-weight:700'>💰 BID INTELLIGENCE</div>"
+        "<div style='font-size:1.8rem;font-weight:800;color:#0a0f1c;line-height:1.2'>"
+        "Federal contracts matching AqueLyst products"
+        "</div>"
+        "<div style='color:#475569;margin-top:0.4rem;font-size:0.95rem'>"
+        "Pulls active SAM.gov opportunities, scores them against AqueLyst's NAICS "
+        "+ keyword profile, and surfaces the highest-fit bids for your team to pursue."
+        "</div></div>"
+    )
+
+    api_key = api_keys.get_key('sam_gov')
+    if not api_key:
+        st.warning(
+            "⚠️ **SAM.gov API key required.** Get a free one at "
+            "[open.gsa.gov/api/get-opportunities-public-api](https://open.gsa.gov/api/get-opportunities-public-api/) "
+            "→ paste it in **🛡 Admin → 🔑 API Keys → Lead Discovery → SAM.gov** → "
+            "come back here."
+        )
+        return
+
+    # Stats summary cards
+    stats = database.bid_opportunities_stats()
+    cols = st.columns(4)
+    cols[0].metric("📋 Total opportunities", stats['total'])
+    cols[1].metric("✨ New", stats['new'])
+    cols[2].metric("🔥 Hot (score ≥ 60)", stats['hot'])
+    cols[3].metric("Products covered", len(stats['by_product']))
+
+    # Refresh button
+    rc1, rc2, rc3 = st.columns([2, 2, 2])
+    days_back = rc1.selectbox("Look back", [7, 14, 30, 60, 90], index=2,
+                                key="bid_days_back")
+    min_score = rc2.slider("Minimum match score", 10, 80, 25, 5,
+                            key="bid_min_score")
+    if rc3.button("🔄 Refresh from SAM.gov", type="primary",
+                   use_container_width=True, key="refresh_bids"):
+        progress_msgs = []
+        with st.spinner("Querying SAM.gov..."):
+            opps, err = bid_intelligence.discover_bid_opportunities(
+                api_key=api_key, max_results=200, days=days_back,
+                min_score=min_score,
+                on_progress=lambda m: progress_msgs.append(m),
+            )
+        for m in progress_msgs:
+            st.caption(m)
+        if err:
+            st.error(f"❌ {err}")
+        else:
+            added = sum(database.save_bid_opportunity(o) for o in opps)
+            st.success(f"✅ Found {len(opps)} matching opportunities — {added} new, {len(opps) - added} already saved.")
+
+    st.markdown("---")
+
+    # Filters
+    f1, f2, f3 = st.columns(3)
+    PRODUCT_OPTIONS = ['All', 'Duo Equine', 'Pets', 'SpillMaster', 'AMR',
+                       'HouseHold', 'Inversion Misting']
+    product_filter = f1.selectbox("Filter by product", PRODUCT_OPTIONS,
+                                   key="bid_product_filter")
+    status_filter = f2.selectbox("Filter by status",
+                                  ['All', 'new', 'reviewing', 'pursuing',
+                                   'won', 'lost', 'dismissed'],
+                                  key="bid_status_filter")
+    sort_score_min = f3.slider("Show only score ≥", 0, 100, 25, 5,
+                                key="bid_show_min_score")
+
+    opps = database.get_bid_opportunities(
+        product_filter=None if product_filter == 'All' else product_filter,
+        status_filter=None if status_filter == 'All' else status_filter,
+        min_score=sort_score_min,
+        limit=300,
+    )
+
+    if not opps:
+        st.info("_No opportunities yet. Click **🔄 Refresh from SAM.gov** above to start._")
+        return
+
+    st.markdown(f"### 📋 {len(opps)} opportunities (highest fit first)")
+    for opp in opps[:50]:
+        _render_bid_opportunity_card(opp)
+
+
+def _render_bid_opportunity_card(opp):
+    score = opp.get('match_score') or 0
+    score_color = '#16a34a' if score >= 70 else '#f59e0b' if score >= 50 else '#94a3b8'
+    deadline = opp.get('deadline') or ''
+    deadline_short = deadline[:10] if deadline else 'no deadline'
+    posted_short = (opp.get('posted_at') or '')[:10]
+    product = opp.get('product_fit') or 'unmatched'
+    status = opp.get('status') or 'new'
+    status_color = {'new': '#06b6d4', 'reviewing': '#f59e0b',
+                     'pursuing': '#16a34a', 'won': '#16a34a',
+                     'lost': '#94a3b8', 'dismissed': '#94a3b8'}.get(status, '#94a3b8')
+
+    title = (opp.get('title') or '(no title)')[:120]
+    agency = opp.get('agency') or '(unknown agency)'
+
+    with st.expander(f"🎯 **{score}** · {product} · {title} · _{agency}_"):
+        # Top metadata row
+        st.html(
+            f"<div style='display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.6rem'>"
+            f"<span style='background:{score_color};color:white;padding:0.2rem 0.7rem;"
+            f"border-radius:10px;font-size:0.78rem;font-weight:700'>SCORE {score}</span>"
+            f"<span style='background:#1a5f3f;color:white;padding:0.2rem 0.7rem;"
+            f"border-radius:10px;font-size:0.78rem;font-weight:700'>{product.upper()}</span>"
+            f"<span style='background:{status_color};color:white;padding:0.2rem 0.7rem;"
+            f"border-radius:10px;font-size:0.78rem;font-weight:700'>{status.upper()}</span>"
+            f"<span style='color:#64748b;font-size:0.8rem'>NAICS {opp.get('naics') or '?'}</span>"
+            f"<span style='color:#64748b;font-size:0.8rem'>📍 {opp.get('place') or 'nationwide'}</span>"
+            f"<span style='color:#64748b;font-size:0.8rem'>📅 posted {posted_short}</span>"
+            f"<span style='color:#dc2626;font-size:0.8rem;font-weight:600'>"
+            f"⏰ deadline {deadline_short}</span>"
+            f"</div>"
+        )
+
+        if opp.get('match_reasoning'):
+            st.html(
+                f"<div style='background:#fef9e7;border-left:3px solid #f59e0b;"
+                f"padding:0.5rem 0.8rem;border-radius:0 6px 6px 0;font-size:0.85rem;"
+                f"color:#78350f;margin-bottom:0.6rem'>"
+                f"<strong>Why this matched:</strong> {opp['match_reasoning']}"
+                f"</div>"
+            )
+
+        # Description
+        desc = opp.get('description') or ''
+        if desc:
+            st.markdown("**Description:**")
+            st.markdown(desc[:2000] + ("..." if len(desc) > 2000 else ""))
+
+        # Contact info
+        st.markdown("---")
+        st.markdown("**Contact / Point of Contact:**")
+        contact_bits = []
+        if opp.get('contact_name'):
+            contact_bits.append(f"👤 {opp['contact_name']}")
+        if opp.get('contact_email'):
+            contact_bits.append(f"✉️ `{opp['contact_email']}`")
+        if opp.get('contact_phone'):
+            contact_bits.append(f"📞 {opp['contact_phone']}")
+        if contact_bits:
+            st.markdown(" · ".join(contact_bits))
+        else:
+            st.caption("_No POC listed in the SAM.gov record._")
+
+        # Actions
+        st.markdown("---")
+        ac1, ac2, ac3, ac4, ac5 = st.columns(5)
+        if ac1.button("🌐 Open on SAM.gov", key=f"bid_open_{opp['id']}",
+                       use_container_width=True):
+            st.markdown(f"[Click to open]({opp.get('url', '#')})", unsafe_allow_html=True)
+        if ac2.button("📥 Add to CRM as lead", key=f"bid_to_crm_{opp['id']}",
+                       use_container_width=True):
+            if opp.get('contact_email'):
+                lead_id = database.add_lead({
+                    'business_name': opp.get('agency') or opp.get('title', '')[:80],
+                    'contact_name': opp.get('contact_name', ''),
+                    'email': opp.get('contact_email'),
+                    'phone': opp.get('contact_phone', ''),
+                    'business_type': f"federal procurement ({opp.get('naics', '')})",
+                    'lead_source': 'bid_intelligence',
+                    'product_fit': opp.get('product_fit'),
+                    'pain_hypothesis': f"Federal RFP for {product.lower()}-related work",
+                    'message': opp.get('match_reasoning'),
+                    'notes': f"From SAM.gov bid {opp.get('external_id')}\n\n"
+                              f"Title: {opp.get('title')}\n"
+                              f"Agency: {opp.get('agency')}\n"
+                              f"Deadline: {opp.get('deadline')}\n\n"
+                              f"{(opp.get('description') or '')[:1500]}",
+                    'lead_score': score,
+                })
+                if lead_id:
+                    database.update_bid_opportunity(opp['id'], status='pursuing')
+                    st.success(f"✅ Added to CRM as lead #{lead_id}")
+                    st.rerun()
+                else:
+                    st.warning("Lead with that email already in CRM.")
+            else:
+                st.error("No contact email — can't auto-create a CRM lead.")
+        if ac3.button("👀 Mark reviewing", key=f"bid_review_{opp['id']}",
+                       use_container_width=True):
+            database.update_bid_opportunity(opp['id'], status='reviewing')
+            st.rerun()
+        if ac4.button("🗑 Dismiss", key=f"bid_dismiss_{opp['id']}",
+                       use_container_width=True):
+            database.update_bid_opportunity(opp['id'], status='dismissed')
+            st.rerun()
+        if ac5.button("❌ Delete", key=f"bid_delete_{opp['id']}",
+                       use_container_width=True):
+            database.delete_bid_opportunity(opp['id'])
+            st.rerun()
 
 
 # ===========================================================================

@@ -228,6 +228,35 @@ def init_db():
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    # Federal bid opportunities — SAM.gov + future state procurement portals.
+    # Each entry is one RFP/RFQ/sources-sought notice scored against AqueLyst products.
+    c.execute('''CREATE TABLE IF NOT EXISTS bid_opportunities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT,
+        external_id TEXT UNIQUE,
+        title TEXT,
+        agency TEXT,
+        naics TEXT,
+        description TEXT,
+        posted_at TEXT,
+        deadline TEXT,
+        place TEXT,
+        contact_email TEXT,
+        contact_name TEXT,
+        contact_phone TEXT,
+        url TEXT,
+        product_fit TEXT,
+        match_score INTEGER,
+        match_reasoning TEXT,
+        status TEXT DEFAULT 'new',
+        notes TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_bid_score ON bid_opportunities(match_score DESC)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_bid_deadline ON bid_opportunities(deadline)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_bid_product ON bid_opportunities(product_fit)')
+
     # Connection-test history + request counters per baseline provider.
     # Used both for showing "connected" status AND for load-balancing across providers.
     c.execute('''CREATE TABLE IF NOT EXISTS provider_connection_log (
@@ -754,6 +783,103 @@ def provider_log_err(provider, error_text):
               (provider, (error_text or '')[:200]))
     conn.commit()
     conn.close()
+
+
+# ============================================================================
+# Bid opportunities (federal procurement)
+# ============================================================================
+def save_bid_opportunity(opp):
+    """Insert a bid opportunity. Returns 1 if new, 0 if duplicate."""
+    if not opp.get('external_id'):
+        return 0
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT INTO bid_opportunities
+            (source, external_id, title, agency, naics, description,
+             posted_at, deadline, place, contact_email, contact_name,
+             contact_phone, url, product_fit, match_score, match_reasoning)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (opp.get('source'), opp.get('external_id'), opp.get('title'),
+              opp.get('agency'), opp.get('naics'), opp.get('description'),
+              opp.get('posted_at'), opp.get('deadline'), opp.get('place'),
+              opp.get('contact_email'), opp.get('contact_name'),
+              opp.get('contact_phone'), opp.get('url'),
+              opp.get('product_fit'), opp.get('match_score'),
+              opp.get('match_reasoning')))
+        conn.commit()
+        return 1
+    except db_backend.IntegrityError:
+        return 0
+    finally:
+        conn.close()
+
+
+def get_bid_opportunities(product_filter=None, status_filter=None,
+                           min_score=0, limit=200):
+    conn = get_connection()
+    c = conn.cursor()
+    where = ['match_score >= ?']
+    params = [min_score]
+    if product_filter:
+        where.append('product_fit = ?')
+        params.append(product_filter)
+    if status_filter:
+        where.append('status = ?')
+        params.append(status_filter)
+    sql = (f"SELECT * FROM bid_opportunities WHERE {' AND '.join(where)} "
+           f"ORDER BY match_score DESC, posted_at DESC LIMIT ?")
+    params.append(limit)
+    c.execute(sql, params)
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_bid_opportunity(opp_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT * FROM bid_opportunities WHERE id = ?', (opp_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_bid_opportunity(opp_id, **fields):
+    if not fields:
+        return
+    conn = get_connection()
+    c = conn.cursor()
+    cols = ', '.join(f"{k} = ?" for k in fields.keys())
+    params = list(fields.values()) + [opp_id]
+    c.execute(f"UPDATE bid_opportunities SET {cols}, "
+               f"updated_at = CURRENT_TIMESTAMP WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_bid_opportunity(opp_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('DELETE FROM bid_opportunities WHERE id = ?', (opp_id,))
+    conn.commit()
+    conn.close()
+
+
+def bid_opportunities_stats():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as n FROM bid_opportunities")
+    total = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE status = 'new'")
+    new = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) as n FROM bid_opportunities WHERE match_score >= 60")
+    hot = c.fetchone()[0]
+    c.execute("SELECT product_fit, COUNT(*) as n FROM bid_opportunities "
+               "GROUP BY product_fit ORDER BY n DESC")
+    by_product = [(r['product_fit'], r['n']) for r in c.fetchall()]
+    conn.close()
+    return {'total': total, 'new': new, 'hot': hot, 'by_product': by_product}
 
 
 def provider_log_pick(provider):
