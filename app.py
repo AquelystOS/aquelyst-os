@@ -527,26 +527,35 @@ st.markdown("""
         background: var(--surface);
         backdrop-filter: blur(12px);
         border-radius: 12px;
-        padding: 0.3rem;
+        padding: 0.35rem;
         border: 1px solid var(--border-strong);
-        gap: 0.2rem;
+        gap: 0.25rem;
     }
     button[data-baseweb="tab"] {
-        font-weight: 600 !important;
-        color: var(--ink-muted) !important;
+        font-weight: 700 !important;
+        color: #334155 !important;          /* slate-700 — readable on white */
         font-size: 0.92rem !important;
         border-radius: 9px !important;
-        padding: 0.5rem 1.1rem !important;
+        padding: 0.55rem 1.1rem !important;
         transition: all 0.18s ease;
+        border: 1px solid transparent !important;
+    }
+    button[data-baseweb="tab"] * {
+        color: inherit !important;          /* tabs sometimes nest text in a span */
     }
     button[data-baseweb="tab"]:hover {
-        color: var(--ink) !important;
-        background: rgba(6,182,212,0.06);
+        color: #0a0f1c !important;
+        background: rgba(6,182,212,0.10) !important;
+        border-color: rgba(6,182,212,0.25) !important;
     }
     button[data-baseweb="tab"][aria-selected="true"] {
-        color: white !important;
+        color: #ffffff !important;
         background: var(--grad) !important;
-        box-shadow: 0 2px 8px rgba(6,182,212,0.25);
+        box-shadow: 0 4px 14px rgba(6,182,212,0.30) !important;
+        border-color: transparent !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] * {
+        color: #ffffff !important;
     }
     div[data-baseweb="tab-highlight"] { display: none !important; }
     div[data-baseweb="tab-border"] { display: none !important; }
