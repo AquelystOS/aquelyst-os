@@ -2087,26 +2087,29 @@ def discover_horse_businesses(business_type, location=None, max_results=20, on_p
             if on_progress:
                 on_progress("Industry directories", f"failed: {str(e)[:40]}")
 
-    # ===== SOURCE 4: Equine industry directories =====
-    for directory_url in EQUINE_DIRECTORIES:
-        if on_progress:
-            on_progress("Equine Directory", urlparse(directory_url).netloc)
-        try:
-            dir_results = scrape_equine_directory(directory_url)
-            added = 0
-            for r in dir_results:
-                if add_candidate(r, "Equine Directory"):
-                    added += 1
+    # ===== SOURCE 4: Equine industry directories — ONLY for equine business types =====
+    # Critical: this used to fire for every hunt, polluting non-equine searches
+    # (memory care, kennels, marinas, etc.) with unrelated horse business URLs.
+    if product_for_type == 'Duo Equine':
+        for directory_url in EQUINE_DIRECTORIES:
             if on_progress:
-                on_progress("Equine Directory", f"+{added} new (total: {len(all_candidates)})")
-        except Exception:
-            pass
-        time.sleep(POLITE_DELAY)
-        if len(all_candidates) >= max_results * 2:
-            break
+                on_progress("Equine Directory", urlparse(directory_url).netloc)
+            try:
+                dir_results = scrape_equine_directory(directory_url)
+                added = 0
+                for r in dir_results:
+                    if add_candidate(r, "Equine Directory"):
+                        added += 1
+                if on_progress:
+                    on_progress("Equine Directory", f"+{added} new (total: {len(all_candidates)})")
+            except Exception:
+                pass
+            time.sleep(POLITE_DELAY)
+            if len(all_candidates) >= max_results * 2:
+                break
 
-    # ===== SOURCE 5: Curated seed list (guaranteed fallback) =====
-    if len(all_candidates) < max_results // 2:
+    # ===== SOURCE 5: Curated seed list — ONLY for equine (the seed list is equine-only) =====
+    if product_for_type == 'Duo Equine' and len(all_candidates) < max_results // 2:
         if on_progress:
             on_progress("Curated Seeds", f"loading verified {business_type}s")
         try:

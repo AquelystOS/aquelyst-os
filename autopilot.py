@@ -471,10 +471,36 @@ def run_autopilot(config):
 
 
 def start_autopilot(config):
-    """Start autopilot in background thread."""
+    """Start autopilot in background thread.
+
+    IMPORTANT: We set `running=True` SYNCHRONOUSLY in the main thread before
+    spawning the worker thread. Otherwise the Streamlit page reruns before the
+    worker thread has had a chance to update state, the page reads
+    `running=False`, and the user sees the idle view despite their click —
+    which forces them to click Launch a second time.
+    """
     state = get_state()
     if state.get('running'):
         return False, "Autopilot is already running"
+
+    # Synchronously flip the running flag and seed the config so the next
+    # st.rerun() reads the correct state.
+    update_state(
+        running=True,
+        started_at=datetime.now().isoformat(),
+        config=config,
+        current_action="initializing",
+        stats={
+            "discovered": 0,
+            "researched": 0,
+            "qualified": 0,
+            "added_to_crm": 0,
+            "skipped": 0,
+            "errors": 0,
+        },
+        recent_leads=[],
+        sources_used={},
+    )
 
     thread = threading.Thread(target=run_autopilot, args=(config,), daemon=True)
     thread.start()

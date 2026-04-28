@@ -85,12 +85,21 @@ def _build_user_prompt(message_type, lead_data):
     type_instructions = {
         "cold_email": (
             "Write a cold email (5-7 sentences). Subject line first as 'Subject: ...', blank line, body.\n"
-            "RULES (STRICT):\n"
-            "1. You MUST reference at least ONE specific fact from the prospect's research above (their hook, their location, their business type, or a burden indicator). NO generic openers.\n"
-            "2. Match the product fit to the pain — if it's Pets, talk kennel/shelter pain, NOT horse pain.\n"
-            "3. End with ONE focused, low-pressure discovery question.\n"
-            "4. NO offer, NO trial, NO sample, NO demo — just discovery.\n"
-            "5. If the data is too thin to write something specific, output exactly: 'ESCALATE: insufficient research data' and nothing else."
+            "RULES (STRICT — VIOLATING ANY OF THESE IS A FAILED EMAIL):\n"
+            "1. You MUST reference at least ONE specific fact from the prospect's research above "
+            "(their hook, their location, their business type, or a burden indicator). NO generic openers.\n"
+            "2. PRODUCT LOCK: The 'Product fit' field above tells you exactly which AqueLyst "
+            "product belongs in this email. STAY ON THAT PRODUCT. If it's 'Pets' you talk "
+            "kennel/shelter/vet pain. If 'AMR' you talk fleet/marine/RV. If 'SpillMaster' you "
+            "talk commercial/food/healthcare. Do NOT pivot to horses unless product_fit is 'Duo Equine'.\n"
+            "3. ABSOLUTELY NO OFFERS in cold outreach: no trial, no sample, no demo, no "
+            "free week, no '7 days', no money-back, no testing offer. The whole point is "
+            "discovery — get them TALKING. Offers come ONLY in reply mode after they've "
+            "expressed interest. Mentioning ANY offer in a cold email is a failed email.\n"
+            "4. End with ONE focused, low-pressure discovery question. Make them think.\n"
+            "5. If the prospect data is too thin to write something specific (no hook, no "
+            "burden indicators, generic business name), output EXACTLY: "
+            "'ESCALATE: insufficient research data' and nothing else."
         ),
         "reply_to_inbound": (
             "They reached out. Read what they said and RESPOND TO IT — don't pivot. Acknowledge their actual words first, then engage. Subject 'Re: ...' first."
