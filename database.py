@@ -1122,7 +1122,7 @@ def add_to_suppression(email, reason="manual"):
     try:
         c.execute('''INSERT INTO suppression_list (email, reason)
                      VALUES (?, ?)''', (email, reason))
-        c.execute('UPDATE leads SET opt_out = 1, status = "opted_out" WHERE email = ?', (email,))
+        c.execute("UPDATE leads SET opt_out = 1, status = 'opted_out' WHERE email = ?", (email,))
         conn.commit()
         return True
     except db_backend.IntegrityError:
@@ -1269,10 +1269,10 @@ def get_all_leads(include_team_internal=False):
     if include_team_internal:
         c.execute('SELECT * FROM leads ORDER BY created_at DESC')
     else:
-        c.execute('''SELECT * FROM leads
-                     WHERE (lead_source IS NULL OR lead_source != "team_internal")
-                     AND (status IS NULL OR status != "team_internal")
-                     ORDER BY created_at DESC''')
+        c.execute("""SELECT * FROM leads
+                     WHERE (lead_source IS NULL OR lead_source != 'team_internal')
+                     AND (status IS NULL OR status != 'team_internal')
+                     ORDER BY created_at DESC""")
     leads = c.fetchall()
     conn.close()
     return leads
@@ -1282,9 +1282,9 @@ def get_team_internal_leads():
     """Get only team-internal leads (used for tracking team-to-team email)."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''SELECT * FROM leads
-                 WHERE lead_source = "team_internal" OR status = "team_internal"
-                 ORDER BY created_at DESC''')
+    c.execute("""SELECT * FROM leads
+                 WHERE lead_source = 'team_internal' OR status = 'team_internal'
+                 ORDER BY created_at DESC""")
     leads = c.fetchall()
     conn.close()
     return leads
@@ -1364,12 +1364,12 @@ def get_hot_leads():
     """Get high-scoring leads (score >= 70). Excludes team-internal entries."""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('''SELECT * FROM leads
+    c.execute("""SELECT * FROM leads
                  WHERE lead_score >= 70
-                 AND status != "opted_out"
-                 AND status != "team_internal"
-                 AND (lead_source IS NULL OR lead_source != "team_internal")
-                 ORDER BY lead_score DESC''')
+                 AND status != 'opted_out'
+                 AND status != 'team_internal'
+                 AND (lead_source IS NULL OR lead_source != 'team_internal')
+                 ORDER BY lead_score DESC""")
     leads = c.fetchall()
     conn.close()
     return leads
@@ -1379,13 +1379,13 @@ def get_follow_ups_due():
     conn = get_connection()
     c = conn.cursor()
     today = datetime.now().strftime('%Y-%m-%d')
-    c.execute('''SELECT * FROM leads
+    c.execute("""SELECT * FROM leads
                  WHERE next_follow_up_date IS NOT NULL
                  AND next_follow_up_date <= ?
-                 AND status != "opted_out"
-                 AND status != "closed_won"
-                 AND status != "closed_lost"
-                 ORDER BY next_follow_up_date ASC''', (today,))
+                 AND status != 'opted_out'
+                 AND status != 'closed_won'
+                 AND status != 'closed_lost'
+                 ORDER BY next_follow_up_date ASC""", (today,))
     leads = c.fetchall()
     conn.close()
     return leads
@@ -1400,29 +1400,29 @@ def get_dashboard_stats():
     c.execute('SELECT COUNT(*) FROM leads')
     stats['total_leads'] = c.fetchone()[0]
 
-    c.execute('SELECT COUNT(*) FROM leads WHERE status = "new"')
+    c.execute("SELECT COUNT(*) FROM leads WHERE status = 'new'")
     stats['new_leads'] = c.fetchone()[0]
 
     c.execute('SELECT COUNT(*) FROM leads WHERE lead_score >= 70')
     stats['hot_leads'] = c.fetchone()[0]
 
     today = datetime.now().strftime('%Y-%m-%d')
-    c.execute('''SELECT COUNT(*) FROM leads
+    c.execute("""SELECT COUNT(*) FROM leads
                  WHERE next_follow_up_date IS NOT NULL
                  AND next_follow_up_date <= ?
-                 AND status NOT IN ("opted_out", "closed_won", "closed_lost")''', (today,))
+                 AND status NOT IN ('opted_out', 'closed_won', 'closed_lost')""", (today,))
     stats['follow_ups_due'] = c.fetchone()[0]
 
-    c.execute('SELECT COUNT(*) FROM leads WHERE status = "interested"')
+    c.execute("SELECT COUNT(*) FROM leads WHERE status = 'interested'")
     stats['interested'] = c.fetchone()[0]
 
-    c.execute('SELECT COUNT(*) FROM leads WHERE status = "trial_offered"')
+    c.execute("SELECT COUNT(*) FROM leads WHERE status = 'trial_offered'")
     stats['trial_offered'] = c.fetchone()[0]
 
-    c.execute('SELECT COUNT(*) FROM leads WHERE status = "closed_won"')
+    c.execute("SELECT COUNT(*) FROM leads WHERE status = 'closed_won'")
     stats['closed_won'] = c.fetchone()[0]
 
-    c.execute('SELECT COUNT(*) FROM leads WHERE status = "closed_lost"')
+    c.execute("SELECT COUNT(*) FROM leads WHERE status = 'closed_lost'")
     stats['closed_lost'] = c.fetchone()[0]
 
     c.execute('SELECT COUNT(*) FROM leads WHERE opt_out = 1')

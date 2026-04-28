@@ -669,10 +669,10 @@ def _build_crm_snapshot():
                      GROUP BY status''')
         statuses = {r['status']: r['n'] for r in c.fetchall()}
 
-        c.execute('SELECT COUNT(*) FROM leads WHERE lead_score >= 70 AND status != "team_internal"')
+        c.execute("SELECT COUNT(*) FROM leads WHERE lead_score >= 70 AND status != 'team_internal'")
         hot_count = c.fetchone()[0]
 
-        c.execute('SELECT COUNT(*) FROM leads WHERE lead_source != "team_internal" OR lead_source IS NULL')
+        c.execute("SELECT COUNT(*) FROM leads WHERE lead_source != 'team_internal' OR lead_source IS NULL")
         total = c.fetchone()[0]
 
         # Sent + received last 7 days
