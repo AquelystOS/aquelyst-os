@@ -171,70 +171,40 @@ def delete_member(index):
 def get_current_user():
     """Determine the currently-logged-in user.
 
-    Priority:
-    1. Streamlit session_state.logged_in_user_email (set by the per-user login flow)
-    2. The connected SMTP email (legacy fallback for code paths that pre-date login)
-    3. Generic fallback
+    Source of truth is the per-user login flow (st.session_state). NEVER
+    fall back to whoever's SMTP config happens to exist on disk — that
+    bug caused emails generated when Danielle was logged in to be signed
+    as Joseph (whose SMTP config was the global fallback). The session-
+    state user is the only authoritative answer.
+
+    Returns a member dict from team_members.json if known, otherwise a
+    placeholder built from the email. Never returns a different person.
     """
-    # 1. Session-state-driven login (the new way)
     try:
         import streamlit as _st
         email = (_st.session_state.get('logged_in_user_email') or '').lower()
-        if email:
-            member = get_member_by_email(email)
-            if member:
-                return member
-            return {
-                'name': email.split('@')[0].title(),
-                'email': email,
-                'role': 'Team member',
-                'short_role': 'AqueLyst',
-                'bio': '',
-                'aliases': [],
-                'company': 'AqueLyst',
-                '_unknown': True,
-            }
     except Exception:
-        pass
+        email = ''
 
-    # 2. Legacy: SMTP-config-based detection (per-user SMTP via DB, then global file)
-    try:
-        import database as _db
-        # Try logged-in user's per-user SMTP config first
-        try:
-            import streamlit as _st
-            email = (_st.session_state.get('logged_in_user_email') or '').lower()
-            if email:
-                cfg = _db.smtp_get(email)
-                if cfg and cfg.get('smtp_email'):
-                    member = get_member_by_email(cfg['smtp_email'])
-                    if member:
-                        return member
-        except Exception:
-            pass
+    if email:
+        member = get_member_by_email(email)
+        if member:
+            return member
+        # Logged in but not on the official roster — build a self-only profile
+        return {
+            'name': email.split('@')[0].title(),
+            'email': email,
+            'role': 'Team member',
+            'short_role': 'AqueLyst',
+            'bio': '',
+            'aliases': [],
+            'company': 'AqueLyst',
+            '_unknown': True,
+        }
 
-        # Fall back to the global smtp_config.json
-        import smtp_sender
-        cfg = smtp_sender.load_smtp_config()
-        if cfg:
-            user_email = cfg.get('email', '')
-            member = get_member_by_email(user_email)
-            if member:
-                return member
-            sender_name = cfg.get('sender_name', user_email.split('@')[0].title())
-            return {
-                'name': sender_name,
-                'email': user_email,
-                'role': 'Team member',
-                'short_role': 'AqueLyst',
-                'bio': '',
-                'aliases': [],
-                'company': 'AqueLyst',
-                '_unknown': True,
-            }
-    except Exception:
-        pass
-
+    # Nobody logged in (background thread before session_state, dev mode,
+    # or the login gate itself). Return a generic placeholder — DO NOT read
+    # any SMTP config or fall back to a real team member.
     return {
         'name': 'AqueLyst Team',
         'email': '',

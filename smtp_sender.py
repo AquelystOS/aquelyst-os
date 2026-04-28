@@ -114,9 +114,17 @@ def save_smtp_config(provider, email, app_password, sender_name=""):
 
 
 def load_smtp_config():
-    """Load SMTP config — per-user from DB if logged in, else global file."""
+    """Load SMTP config for the CURRENTLY LOGGED-IN user.
+
+    If a user is logged in but has no SMTP saved, returns None — does NOT
+    silently fall back to anyone else's smtp_config.json. That fallback
+    was the root cause of Danielle's emails sending FROM Joseph's address.
+
+    The legacy global file is only used when nobody is logged in (dev mode
+    / background context with no session_state)."""
     user_email = _current_user_email()
     if user_email:
+        # Logged-in user: their own config or NOTHING. No silent leak to others.
         try:
             import database
             cfg = database.smtp_get(user_email)
@@ -129,8 +137,9 @@ def load_smtp_config():
                 }
         except Exception:
             pass
+        return None
 
-    # Legacy fallback
+    # Nobody logged in — fall back to the legacy global file (dev / background)
     import base64
     if not Path(CONFIG_FILE).exists():
         return None
@@ -182,12 +191,24 @@ def test_smtp_connection(provider, email, app_password):
 
 def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_pixel_url=None):
     """
-    Send email via configured SMTP.
+    Send email via configured SMTP for the CURRENTLY LOGGED-IN user.
     Returns (success, message).
+
+    If the logged-in user has no SMTP configured, the send is BLOCKED with
+    a clear message. We never silently borrow another user's SMTP — that
+    was the bug that masqueraded Danielle's emails as Joseph's.
     """
+    user_email = _current_user_email()
     config = load_smtp_config()
     if not config:
-        return False, "SMTP not configured. Go to Settings to set up."
+        if user_email:
+            return False, (
+                f"📭 No email connected for {user_email}. Go to "
+                "**Setup → Email** and connect your Gmail (or other provider) "
+                "with an App Password before sending. Aqua won't send as "
+                "anyone else."
+            )
+        return False, "SMTP not configured. Go to Setup → Email to connect your account."
 
     preset = SMTP_PRESETS.get(config['provider'])
     if not preset:
