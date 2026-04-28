@@ -83,19 +83,61 @@ DEFAULT_TEAM = [
 ]
 
 
-def load_team():
-    """Load team from disk, falls back to defaults."""
+def load_team(include_self_registered=True):
+    """Load team from disk, falls back to defaults.
+
+    If `include_self_registered` is True (default), also merges in users
+    who signed in via the "Other email" path on the login screen and
+    aren't yet on the official roster. Each gets a synthesized profile
+    flagged with `_self_registered=True` so the UI can offer a "Promote
+    to roster" action. This is what surfaces them in the login dropdown
+    + Admin → Team panel after sign-up.
+    """
+    # Official roster
     if not Path(TEAM_FILE).exists():
         save_team(DEFAULT_TEAM)
-        return list(DEFAULT_TEAM)
+        roster = list(DEFAULT_TEAM)
+    else:
+        try:
+            with open(TEAM_FILE) as f:
+                data = json.load(f)
+            roster = data if isinstance(data, list) and data else list(DEFAULT_TEAM)
+        except Exception:
+            roster = list(DEFAULT_TEAM)
+
+    if not include_self_registered:
+        return roster
+
+    # Merge self-registered users (live in user_accounts, not the JSON file)
     try:
-        with open(TEAM_FILE) as f:
-            data = json.load(f)
-        if isinstance(data, list) and data:
-            return data
+        import database as _db
+        accounts = _db.user_account_list()
     except Exception:
-        pass
-    return list(DEFAULT_TEAM)
+        accounts = []
+
+    roster_emails = {(m.get('email') or '').lower().strip() for m in roster}
+    for acc in accounts:
+        email = (acc.get('email') or '').lower().strip()
+        if not email or email in roster_emails:
+            continue
+        local = email.split('@')[0]
+        # "joe.smith" / "joe-smith" / "joe_smith" → "Joe Smith"
+        cleaned = local.replace('.', ' ').replace('_', ' ').replace('-', ' ')
+        name = ' '.join(part.capitalize() for part in cleaned.split() if part)
+        roster.append({
+            'name': name or email,
+            'email': email,
+            'role': 'Team member',
+            'short_role': 'AqueLyst',
+            'bio': '',
+            'aliases': [local.lower()],
+            'company': 'AqueLyst',
+            '_self_registered': True,
+            'last_login': acc.get('last_login'),
+            'created_at': acc.get('created_at'),
+        })
+
+    return roster
 
 
 def save_team(team):

@@ -212,6 +212,15 @@ def _check_password():
                     st.error("Passwords don't match — type it the same way twice.")
                 else:
                     database.user_set_password(chosen_email, pw1)
+                    # Audit-log the new sign-up so root admin sees it on the
+                    # Audit page and can promote the user via Admin → Team.
+                    try:
+                        import audit_log as _al
+                        _al.log('user_signup',
+                                 f"New account created: {chosen_email}",
+                                 actor=chosen_email)
+                    except Exception:
+                        pass
                     # Don't auto-login. Force them to log in with the new password
                     # so we know they typed it correctly.
                     st.session_state['just_created_account'] = chosen_email
@@ -1363,9 +1372,84 @@ def _admin_admins_section():
 
 def _admin_team_section():
     import team as _team
-    st.markdown("##### Team members")
     members = _team.load_team()
-    for i, m in enumerate(members):
+
+    # Split into official roster vs self-registered (signed in via "Other email"
+    # path on the login screen — currently active accounts not yet on the
+    # official roster). Both lists share the same merged team source so
+    # downstream features (login dropdown, lead resolution, etc.) treat them
+    # uniformly.
+    roster = [m for m in members if not m.get('_self_registered')]
+    pending = [m for m in members if m.get('_self_registered')]
+
+    # ============================================================
+    # PENDING TEAMMATES — surfaced FIRST so admins notice new sign-ups
+    # ============================================================
+    if pending:
+        st.markdown("##### 🆕 New sign-ins not on the official roster")
+        st.caption(f"{len(pending)} user{'s' if len(pending) != 1 else ''} "
+                    "signed in via the 'Other email' path. Promote them to the "
+                    "roster to add a real name, role, and bio so Aqua signs "
+                    "their emails properly.")
+        for i, m in enumerate(pending):
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 2])
+                with c1:
+                    st.markdown(f"**{m.get('name', '—')}** · `{m.get('email', '—')}`")
+                    last = m.get('last_login') or m.get('created_at') or ''
+                    if last:
+                        st.caption(f"Joined / last seen: {str(last)[:19].replace('T', ' ')}")
+
+                with st.form(f"promote_pending_{i}"):
+                    pc1, pc2 = st.columns(2)
+                    p_name = pc1.text_input("Full name", value=m.get('name', ''),
+                                              key=f"prom_name_{i}")
+                    p_role = pc2.text_input("Role", value='Team member',
+                                              key=f"prom_role_{i}")
+                    p_bio = st.text_area("Short bio (Aqua uses this when emailing "
+                                           "as them)", height=70, key=f"prom_bio_{i}")
+                    bc1, bc2 = st.columns([2, 1])
+                    promoted = bc1.form_submit_button(
+                        "⬆️ Promote to roster", type="primary",
+                        use_container_width=True,
+                    )
+                    deleted = bc2.form_submit_button(
+                        "🗑 Delete account", use_container_width=True,
+                        help="Remove their access entirely",
+                    )
+                if promoted:
+                    try:
+                        _team.add_member(
+                            name=p_name or m.get('name'),
+                            email=m['email'],
+                            role=p_role or 'Team member',
+                            bio=p_bio or '',
+                        )
+                        try:
+                            import audit_log as _al
+                            _al.log('team_promote',
+                                     f"Promoted {m['email']} to official roster as "
+                                     f"{p_name} ({p_role})")
+                        except Exception:
+                            pass
+                        st.toast(f"✅ {p_name} added to roster", icon="🎉")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(str(ex))
+                elif deleted:
+                    try:
+                        database.user_delete_account(m['email'])
+                        st.toast(f"Removed {m['email']}", icon="🗑")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(str(ex))
+        st.markdown("---")
+
+    # ============================================================
+    # OFFICIAL ROSTER
+    # ============================================================
+    st.markdown("##### Team members (official roster)")
+    for i, m in enumerate(roster):
         c1, c2, c3, c4 = st.columns([2, 3, 1, 1])
         c1.markdown(f"**{m.get('name', '—')}**")
         c2.markdown(f"`{m.get('email', '—')}` · {m.get('role') or m.get('short_role') or '—'}")
@@ -1386,7 +1470,7 @@ def _admin_team_section():
                 st.error(str(e))
 
     st.markdown("---")
-    st.markdown("##### Add team member")
+    st.markdown("##### Add team member manually")
     with st.form("admin_add_member"):
         c1, c2, c3 = st.columns([2, 2, 2])
         n = c1.text_input("Full name")

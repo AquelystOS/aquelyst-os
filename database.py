@@ -657,6 +657,18 @@ def user_record_login(email):
     conn.close()
 
 
+def user_account_list():
+    """Every user account in the table — used to merge self-registered users
+    into the team roster so admins can see who's on the OS."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT email, last_login, created_at FROM user_accounts '
+              'ORDER BY created_at DESC')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
 def user_delete_account(email):
     """Wipes the password — they have to set a new one next login."""
     conn = get_connection()
