@@ -1044,16 +1044,34 @@ def _admin_keys_section():
             success_pct = round(100 * ok / total) if total else 0
             color = '#16a34a' if success_pct >= 90 else '#f59e0b' if success_pct >= 60 else '#dc2626'
             col.markdown(
-                f"<div style='background:rgba(255,255,255,0.7);"
-                f"border:1px solid rgba(15,23,42,0.08);border-radius:10px;"
-                f"padding:0.6rem 0.8rem;text-align:center'>"
+                f"<div style='text-align:center;padding:0.4rem 0.2rem'>"
+                # Conic-gradient ring — arc length = % of load, color = health
+                f"<div style='width:88px;height:88px;border-radius:50%;"
+                f"background:conic-gradient({color} 0% {pct}%, "
+                f"rgba(15,23,42,0.08) {pct}% 100%);"
+                f"display:flex;align-items:center;justify-content:center;"
+                f"margin:0 auto 0.55rem;"
+                f"box-shadow:0 1px 3px rgba(15,23,42,0.06)'>"
+                # Inner white circle creates the donut hole + holds request count
+                f"<div style='width:64px;height:64px;border-radius:50%;"
+                f"background:#ffffff;display:flex;flex-direction:column;"
+                f"align-items:center;justify-content:center'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.15rem;"
+                f"font-weight:700;color:{color};line-height:1'>{total}</div>"
+                f"<div style='font-size:0.55rem;color:#94a3b8;"
+                f"text-transform:uppercase;letter-spacing:0.08em;"
+                f"margin-top:0.15rem'>req</div>"
+                f"</div></div>"
+                # Provider name + load % + health below
                 f"<div style='font-size:0.72rem;color:#64748b;text-transform:uppercase;"
                 f"letter-spacing:0.06em;font-weight:700'>{pid}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
-                f"font-weight:700;color:#0a0f1c;margin-top:0.2rem'>{total}</div>"
-                f"<div style='font-size:0.7rem;color:#94a3b8'>{pct}% of load</div>"
-                f"<div style='font-size:0.7rem;color:{color};font-weight:600'>"
-                f"{success_pct}% ok</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.25rem;"
+                f"font-weight:700;color:#0a0f1c;margin-top:0.15rem;line-height:1'>"
+                f"{pct}%</div>"
+                f"<div style='font-size:0.65rem;color:#94a3b8;margin-top:0.1rem'>"
+                f"of load</div>"
+                f"<div style='font-size:0.7rem;color:{color};font-weight:600;"
+                f"margin-top:0.25rem'>{success_pct}% ok</div>"
                 f"</div>", unsafe_allow_html=True
             )
         if st.button("Reset counters", key="reset_load_counters"):
