@@ -544,6 +544,10 @@ def process_unread_message(msg, auto_send=False):
         return None
 
     # === ESCALATION ===
+    # Route the draft to whoever originally contacted this lead — their queue,
+    # their voice. Falls back to None (general queue) if no owner recorded.
+    owner = (lead.get('last_contacted_by') if isinstance(lead, dict)
+             else lead['last_contacted_by'] if 'last_contacted_by' in lead.keys() else None)
     if escalate:
         # Create a flagged "needs human review" entry.
         # The escalation reason is stored as activity/notes — NOT in the email body
@@ -560,7 +564,8 @@ def process_unread_message(msg, auto_send=False):
                 lead['id'],
                 f'ESCALATED_{intent}',
                 f"[ESCALATED] {reply['subject']}",
-                reply['body']
+                reply['body'],
+                created_by=owner,
             )
             # Stash the escalation reason in lead notes for the UI to surface
             current_notes = lead['notes'] or ''
@@ -608,12 +613,13 @@ def process_unread_message(msg, auto_send=False):
         dict(lead), conversation, msg['body']
     )
 
-    # Save as draft
+    # Save as draft — routed to the owner who originally contacted them.
     draft_id = database.add_outreach_draft(
         lead['id'],
         f'auto_reply_to_{intent}',
         reply['subject'],
-        reply['body']
+        reply['body'],
+        created_by=owner,
     )
 
     # Save the original incoming message body (so user can SEE what they said)

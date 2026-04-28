@@ -819,6 +819,7 @@ def generate_initial_outreach(lead_data):
 
     current_user = team.get_current_user()
     sender_first = current_user['name'].split()[0] if current_user.get('name') else 'there'
+    me_email = (current_user.get('email') or '').lower()
 
     name_line = (
         f"- Contact (first name): {first_name}"
@@ -827,6 +828,23 @@ def generate_initial_outreach(lead_data):
         "jump straight in. NEVER write [Name], [Prospect], [First Name], or any "
         "bracketed placeholder. Just acknowledge the absence by being direct."
     )
+
+    # Cross-user awareness: if a teammate touched this lead recently, tell
+    # the AI so it doesn't repeat their angle. The lead's last_contacted_by
+    # column is set by every send/auto-engagement.
+    peer_warning = ""
+    last_by = (lead_data.get('last_contacted_by') or '').lower()
+    if last_by and last_by != me_email:
+        peer_member = team.get_member_by_email(last_by) or {}
+        peer_first = (peer_member.get('name') or last_by).split()[0]
+        peer_warning = (
+            f"\n⚠️ HEADS UP — TEAMMATE ALREADY TOUCHED THIS LEAD: {peer_first} "
+            f"({last_by}) reached out previously. DO NOT repeat their pitch. "
+            f"Write a DIFFERENT angle (different hook, different question), and "
+            f"mention you're {sender_first} from the same AqueLyst team so it "
+            f"doesn't feel like cold spam.\n"
+        )
+
     user_msg = f"""Generate the FIRST cold email to this prospect.
 
 PROSPECT:
@@ -835,7 +853,7 @@ PROSPECT:
 - Location: {location or 'unknown'}
 - Known pain/problem: {pain or 'unknown — you may need to use a generic curiosity opener'}
 - Personalized hook from research: {hook or 'none'}
-
+{peer_warning}
 YOU ARE: {current_user['name']} ({current_user['role']}) — sign off as "{sender_first}"
 
 EMAIL REQUIREMENTS:
