@@ -25,6 +25,7 @@ import nepq_engine
 import auto_engagement
 import email_responder
 import audit_log
+import ui_kit
 
 autopilot.reset_stale_state()
 
@@ -1475,17 +1476,15 @@ def show_bid_opportunities():
     """💰 Bid Opportunities — federal procurement intelligence."""
     import bid_intelligence
 
-    st.html(
-        "<div style='margin-bottom:1.2rem'>"
-        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;"
-        "letter-spacing:0.08em;font-weight:700'>💰 BID INTELLIGENCE</div>"
-        "<div style='font-size:1.8rem;font-weight:800;color:#0a0f1c;line-height:1.2'>"
-        "Federal contracts matching AqueLyst products"
-        "</div>"
-        "<div style='color:#475569;margin-top:0.4rem;font-size:0.95rem'>"
-        "Pulls active SAM.gov opportunities, scores them against AqueLyst's NAICS "
-        "+ keyword profile, and surfaces the highest-fit bids for your team to pursue."
-        "</div></div>"
+    ui_kit.page_hero(
+        title="Federal contracts matching "
+               "<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>AqueLyst products</span>",
+        subtitle="Pulls active SAM.gov opportunities, scores them against AqueLyst's "
+                  "NAICS + keyword profile, and surfaces the highest-fit bids for your "
+                  "team to pursue.",
+        eyebrow="💰 BID INTELLIGENCE",
     )
 
     api_key = api_keys.get_key('sam_gov')
@@ -2764,18 +2763,19 @@ def show_autopilot():
 
 def _render_autopilot_locked():
     """When AI isn't configured — show the value prop and CTA to set it up."""
-    st.markdown("""
-    <div style='background:linear-gradient(135deg,#1a5f3f 0%,#2d8659 100%);
-                padding:3rem 2rem;border-radius:16px;color:white;text-align:center;
-                margin-bottom:2rem'>
-        <div style='font-size:4rem'>🤖</div>
-        <h1 style='color:white !important;margin-top:0'>Autopilot</h1>
-        <p style='font-size:1.2rem;opacity:0.9'>
-            AI scrapes the open web for horse barns, qualifies each lead, and fills your CRM.<br>
-            <strong>Free. Runs while you sleep.</strong>
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Autopilot</span> needs an AI brain",
+        subtitle="Connect Cerebras (free, 2 minutes) and Autopilot will scrape the open "
+                  "web for horse barns, qualify each lead with AI, and fill your CRM "
+                  "while you sleep.",
+        eyebrow="🤖 AUTOPILOT · LOCKED",
+        chips=[
+            ("Free tier available", "#10b981"),
+            ("Runs while you sleep", "#06b6d4"),
+        ],
+    )
 
     st.error("⚠️ Autopilot needs AI to work. It uses Cerebras (free tier) to read websites and qualify leads.")
     st.markdown("")
@@ -3242,37 +3242,19 @@ def _render_autopilot_idle(state):
     last_stats = state.get('stats', {})
     has_previous_run = last_stats and any(last_stats.values())
 
-    # ================== HERO (clean style) ==================
-    st.markdown("""
-    <div style='margin-bottom:2rem'>
-        <div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;
-                    letter-spacing:0.08em;font-weight:600'>
-            🤖 Autopilot
-        </div>
-        <div style='font-size:2rem;font-weight:700;color:#0f172a;
-                    letter-spacing:-0.025em;line-height:1.2;margin-top:0.25rem'>
-            Autonomous lead generation
-        </div>
-        <div style='color:#475569;margin-top:0.5rem;font-size:1rem;max-width:600px'>
-            AI scrapes horse businesses across the open web, qualifies each lead,
-            and writes personalized cold emails. Free. Cerebras-powered.
-        </div>
-        <div style='display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap'>
-            <span style='background:#eff6ff;color:#1d4ed8;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                5 scrapers
-            </span>
-            <span style='background:#f0fdf4;color:#166534;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                Cerebras AI
-            </span>
-            <span style='background:#fef3c7;color:#92400e;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                $0 / month
-            </span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Autonomous</span> lead generation",
+        subtitle="AI scrapes horse businesses across the open web, qualifies each lead, "
+                  "and writes personalized cold emails. Free. Cerebras-powered.",
+        eyebrow="🤖 AUTOPILOT",
+        chips=[
+            ("5 scrapers", "#06b6d4"),
+            ("Cerebras AI", "#10b981"),
+            ("$0 / month", "#f59e0b"),
+        ],
+    )
 
     # ================== HOW IT WORKS ==================
     st.markdown("### How it works")
@@ -3514,22 +3496,25 @@ def _render_autopilot_idle(state):
 def show_sales_bot():
     """Sales Bot page — control center for autonomous engagement + training chat."""
 
-    # ===== Hero =====
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Autonomous</span> NEPQ sales agent",
+        subtitle="When a lead crosses your hot threshold, Aqua writes a Jeremy Miner-style "
+                  "NEPQ cold email and (optionally) sends it. When prospects reply, she "
+                  "auto-classifies intent and drafts the perfect next move. Train her in "
+                  "the chat below.",
+        eyebrow="🎯 SALES BOT",
+        chips=[
+            ("NEPQ methodology", "#06b6d4"),
+            ("Inbox monitoring", "#f59e0b"),
+            ("Auto-engagement", "#ec4899"),
+        ],
+    )
+
+    # legacy chip block kept (now hidden) — preserves any downstream layout
     st.markdown("""
-    <div style='margin-bottom:1.5rem'>
-        <div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;
-                    letter-spacing:0.08em;font-weight:600'>
-            🎯 Sales Bot
-        </div>
-        <div style='font-size:2rem;font-weight:700;color:#0f172a;
-                    letter-spacing:-0.025em;line-height:1.2;margin-top:0.25rem'>
-            Autonomous NEPQ Sales Agent
-        </div>
-        <div style='color:#475569;margin-top:0.5rem;font-size:1rem;max-width:700px'>
-            When a lead crosses your hot threshold, the bot writes a Jeremy Miner-style
-            NEPQ cold email and (optionally) sends it. When prospects reply, it auto-classifies
-            their intent and drafts the perfect next move. Train it in the chat below.
-        </div>
+    <div style='display:none'>
         <div style='display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap'>
             <span style='background:#f0f9ff;color:#0369a1;padding:0.3rem 0.7rem;
                          border-radius:14px;font-size:0.8rem;font-weight:600'>
@@ -4116,19 +4101,13 @@ def has_email_safe():
 def show_inbox():
     """Unified Inbox — see everything the bot is sending and receiving."""
 
-    # Hero
-    st.html(
-        "<div style='margin-bottom:1.5rem'>"
-        "<div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;font-weight:600'>"
-        "📬 Inbox"
-        "</div>"
-        "<div style='font-size:2rem;font-weight:700;color:#0f172a;letter-spacing:-0.025em;margin-top:0.25rem'>"
-        "Everything the bot is sending & receiving"
-        "</div>"
-        "<div style='color:#475569;margin-top:0.5rem;font-size:1rem'>"
-        "Sent emails, drafts waiting for your approval, customer replies, and live activity."
-        "</div>"
-        "</div>"
+    ui_kit.page_hero(
+        title="Everything the bot is <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>sending &amp; receiving</span>",
+        subtitle="Sent emails, drafts waiting for your approval, customer replies, "
+                  "and live activity from the watcher.",
+        eyebrow="📬 INBOX",
     )
 
     # Quick stats row (auto-refreshes every 30s)
@@ -4902,16 +4881,16 @@ def _show_pending_drafts(pending):
 def show_customers():
     """Customer hub — 6 tabs organized by how a sales team actually navigates leads."""
 
-    # Header bar
-    head_l, head_r = st.columns([5, 1])
-    head_l.html(
-        "<div>"
-        "<div style='font-size:0.8rem;color:#06b6d4;text-transform:uppercase;"
-        "letter-spacing:0.08em;font-weight:700'>👥 CUSTOMERS</div>"
-        "<div style='font-size:1.9rem;font-weight:800;color:#0a0f1c;line-height:1.1'>"
-        "Your team's CRM</div></div>"
+    ui_kit.page_hero(
+        title="Your team's <span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>CRM</span>",
+        subtitle="Action queue, pipeline, by product, federal bids, full search, "
+                  "and the don't-contact list — all under one roof.",
+        eyebrow="👥 CUSTOMERS",
     )
-    if head_r.button("➕ Add", type="primary", use_container_width=True):
+    add_l, add_r = st.columns([4, 1])
+    if add_r.button("➕ Add customer", type="primary", use_container_width=True):
         st.session_state.page = "add_customer"
         st.rerun()
 
@@ -5566,18 +5545,14 @@ def _render_conversation_thread(thread, lead, key_ns=""):
 def show_send_message():
     """Compose page — write to anyone + see all sent emails + drafts pending."""
 
-    st.html(
-        "<div style='margin-bottom:1.5rem'>"
-        "<div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;font-weight:600'>"
-        "✉️ Compose"
-        "</div>"
-        "<div style='font-size:2rem;font-weight:700;color:#0f172a;letter-spacing:-0.025em;margin-top:0.25rem'>"
-        "Write to anyone · See sent · Review drafts"
-        "</div>"
-        "<div style='color:#475569;margin-top:0.5rem;font-size:1rem'>"
-        "Email any address. AI drafts it. Every send is logged. Bot drafts are pending your approval."
-        "</div>"
-        "</div>"
+    ui_kit.page_hero(
+        title="Write to anyone · "
+               "<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>see sent</span> · review drafts",
+        subtitle="Email any address. AI drafts it. Every send is logged. "
+                  "Bot drafts wait for your approval before going out.",
+        eyebrow="✉️ COMPOSE",
     )
 
     sent = database.get_sent_drafts(limit=500)
@@ -6364,8 +6339,14 @@ def show_add_customer():
 # FIND NEW CUSTOMERS
 # ===========================================================================
 def show_find_customers():
-    st.title("🔍 Find New Customers")
-    st.caption("Search Google Maps for horse barns in your target area, then add them here.")
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Find</span> new customers",
+        subtitle="Search Google Maps for horse barns and AqueLyst-fit businesses in "
+                  "your target area, then add them to the CRM with one click.",
+        eyebrow="🔍 LEAD DISCOVERY",
+    )
 
     col1, col2 = st.columns(2)
     state_options = [""] + [f"{s[0]} - {s[1]}" for s in prospecting.TOP_EQUINE_STATES]
@@ -6456,19 +6437,13 @@ def show_audit_log():
     """Comprehensive audit log — every transaction, second-level timestamps, timezone-aware.
     For legal + records-keeping compliance."""
 
-    st.html(
-        "<div style='margin-bottom:1.5rem'>"
-        "<div style='font-size:0.8rem;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;font-weight:600'>"
-        "📋 Audit Log"
-        "</div>"
-        "<div style='font-size:2rem;font-weight:700;color:#0f172a;letter-spacing:-0.025em;margin-top:0.25rem'>"
-        "Complete transaction history"
-        "</div>"
-        "<div style='color:#475569;margin-top:0.5rem;font-size:1rem;max-width:760px'>"
-        "Every email, lead change, login, bot action — recorded down to the second with timezone. "
-        "Hash-chained for tamper-evidence. Exportable for legal review."
-        "</div>"
-        "</div>"
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Complete</span> transaction history",
+        subtitle="Every email, lead change, login, bot action — recorded down to the second "
+                  "with timezone. Hash-chained for tamper-evidence. Exportable for legal review.",
+        eyebrow="📋 AUDIT LOG",
     )
 
     # Status row (auto-refresh)
@@ -6629,10 +6604,23 @@ def _audit_table_fragment(event_filter, actor_filter, search, limit):
 
 
 def show_setup():
-    st.title("⚙️ Setup")
-
     smtp_ok = smtp_sender.is_configured()
     ai_ok = api_keys.has_key('cerebras') or api_keys.has_key('claude')
+
+    chips = []
+    chips.append(("Email connected", "#10b981") if smtp_ok else ("Email pending", "#f59e0b"))
+    chips.append(("AI connected", "#10b981") if ai_ok else ("AI pending", "#f59e0b"))
+    chips.append(("Web form ready", "#06b6d4"))
+
+    ui_kit.page_hero(
+        title="<span style='background:linear-gradient(135deg,#06b6d4,#22d3ee);"
+               "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
+               "background-clip:text'>Configure</span> your operating system",
+        subtitle="Connect email + AI providers, manage the team, edit the product catalog, "
+                  "and customize the website intake form.",
+        eyebrow="⚙️ SETUP",
+        chips=chips,
+    )
 
     # Status overview
     st.markdown("### What's connected:")
