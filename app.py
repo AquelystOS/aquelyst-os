@@ -3036,6 +3036,9 @@ def show_home():
     </div>
     """, unsafe_allow_html=True)
 
+    # ========== AQUA'S DAILY BRIEF (cached per-session) ==========
+    _aqua_daily_brief()
+
     # ========== AUTOPILOT MINI LIVE WIDGET (always visible) ==========
     _home_autopilot_widget()
 
@@ -3296,6 +3299,98 @@ def show_home():
     with col_right:
         ui_kit.section_header('ACTIVITY · 30s', accent='#06b6d4')
         _home_activity_fragment()
+
+
+def _aqua_daily_brief():
+    """Aqua's plain-English summary of the last 24h of autopilot + Aqua
+    activity, plus one concrete recommendation. Cached in session_state
+    so we don't burn an LLM call on every Today-page render — refresh
+    button regenerates."""
+    cache_key = '_aqua_brief_v1'
+    cached = st.session_state.get(cache_key)
+    if not cached:
+        try:
+            cached = nepq_engine.daily_brief(hours_back=24)
+        except Exception as e:
+            cached = {'prose': f'(brief unavailable: {str(e)[:80]})',
+                      'numbers': {}, 'reply_rate_pct': 0,
+                      'replies': 0, 'sent_total': 0,
+                      'is_running': False, 'source': 'error'}
+        st.session_state[cache_key] = cached
+
+    nums = cached.get('numbers', {})
+    rate = cached.get('reply_rate_pct', 0)
+    is_running = cached.get('is_running', False)
+    status_pill = (
+        '<span style="color:#10b981;font-weight:700">● LIVE</span>'
+        if is_running else
+        '<span style="color:#64748b;font-weight:700">○ idle</span>'
+    )
+
+    st.markdown(f"""
+    <div style='position:relative;background:linear-gradient(135deg,
+                rgba(6,182,212,0.10) 0%,
+                rgba(163,230,53,0.05) 100%);
+                border:1px solid rgba(6,182,212,0.30);
+                border-radius:14px;padding:1.2rem 1.4rem;
+                margin-bottom:1.0rem;
+                box-shadow:0 4px 18px rgba(6,182,212,0.06)'>
+        <div style='display:flex;justify-content:space-between;
+                    align-items:center;margin-bottom:0.7rem'>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;
+                        color:#06b6d4;letter-spacing:0.18em;text-transform:uppercase;
+                        font-weight:700'>◢ AQUA'S DAILY BRIEF · 24H</div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem'>
+                {status_pill}
+            </div>
+        </div>
+        <div style='color:#e2e8f0;font-size:0.95rem;line-height:1.55;
+                    margin-bottom:0.8rem'>
+            {cached.get('prose', '')}
+        </div>
+        <div style='display:flex;gap:0.4rem;flex-wrap:wrap;
+                    font-family:JetBrains Mono,monospace;font-size:0.65rem;
+                    letter-spacing:0.06em;text-transform:uppercase'>
+            <span style='background:rgba(6,182,212,0.18);color:#67e8f9;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(6,182,212,0.35)'>
+                Added {nums.get('added', 0)}
+            </span>
+            <span style='background:rgba(163,230,53,0.15);color:#a3e635;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(163,230,53,0.35)'>
+                Drafted {nums.get('drafted', 0)}
+            </span>
+            <span style='background:rgba(16,185,129,0.15);color:#86efac;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(16,185,129,0.35)'>
+                Sent {nums.get('sent', 0)}
+            </span>
+            <span style='background:rgba(245,158,11,0.15);color:#fcd34d;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(245,158,11,0.35)'>
+                Queued {nums.get('queued', 0)}
+            </span>
+            <span style='background:rgba(239,68,68,0.15);color:#fca5a5;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(239,68,68,0.35)'>
+                Blocked {nums.get('blocked', 0)}
+            </span>
+            <span style='background:rgba(15,23,42,0.50);color:#cbd5e1;
+                         padding:0.18rem 0.55rem;border-radius:999px;
+                         border:1px solid rgba(148,163,184,0.30)'>
+                Reply rate {rate}%
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    spacer, refresh_col = st.columns([5, 1])
+    if refresh_col.button("🔄 Refresh", key="aqua_brief_refresh",
+                            use_container_width=True,
+                            help="Regenerate the brief with fresh data"):
+        st.session_state.pop(cache_key, None)
+        st.rerun()
 
 
 @st.fragment(run_every=30)

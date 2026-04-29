@@ -546,6 +546,82 @@ def _claude_chat(messages, max_tokens=1024, system_prompt=None):
         return None, f"Claude error: {str(e)[:100]}"
 
 
+def daily_brief(hours_back=24):
+    """Aqua summarizes the last N hours of autopilot + Aqua activity for
+    the Today page. Returns a dict with prose summary + raw numbers so
+    the UI can render both. Cached in session_state by the caller — this
+    function does NOT cache itself."""
+    import autopilot as _ap
+    import database as _db
+
+    agg = _ap.aggregate_recent_activity(hours_back)
+    counts = agg['counts']
+    is_running = agg['is_running']
+
+    # Reply-rate context (last 1 day for daily brief)
+    try:
+        perf = _db.cold_email_performance_stats(days=1)
+        reply_rate = perf['totals']['reply_rate_pct']
+        replies = perf['totals']['replies']
+        sent_total = perf['totals']['sent']
+    except Exception:
+        reply_rate, replies, sent_total = 0.0, 0, 0
+
+    # Pipeline snapshot (top stuck statuses)
+    try:
+        ds = _db.get_dashboard_stats()
+    except Exception:
+        ds = {}
+
+    prompt = f"""Brief the AqueLyst team on autopilot + Aqua activity from the last {hours_back} hours. You ARE Aqua. Sharp, dry, useful.
+
+NUMBERS:
+- Autopilot status now: {'🟢 RUNNING' if is_running else '⚪ idle'}
+- Leads added to CRM: {counts.get('added', 0)}
+- Drafts written: {counts.get('drafted', 0)}
+- Auto-sends executed: {counts.get('sent', 0)}
+- Drafts queued for human review: {counts.get('queued', 0)}
+- Drafts blocked by quality gate: {counts.get('blocked', 0)}
+- Errors: {counts.get('error', 0)}
+- Discoveries (raw candidates): {counts.get('discovery', 0)}
+- AI research runs: {counts.get('research', 0)}
+
+REPLY-RATE (24h):
+- {sent_total} sends → {replies} replies → {reply_rate}% reply rate
+
+PIPELINE STATE NOW:
+- {ds.get('hot_leads', 0)} hot leads · {ds.get('follow_ups_due', 0)} follow-ups due
+- {ds.get('interested', 0)} interested · {ds.get('trial_offered', 0)} trials out
+- {ds.get('closed_won', 0)} won · {ds.get('total_leads', 0)} total
+
+Write a 3-4 sentence brief in Aqua's voice — confident, specific, no fluff. Open with what happened (don't lead with the obvious), then surface the most important pattern (trend, anomaly, or stuck state), then end with ONE concrete next-action recommendation for the team today. No "Hey team!" preamble. No sign-off. Just the brief."""
+
+    text, source = chat([{"role": "user", "content": prompt}])
+    if not text:
+        # Template fallback so the brief still renders if every LLM is down
+        text = (
+            f"Last {hours_back}h: autopilot {'is running' if is_running else 'is idle'}. "
+            f"Added {counts.get('added', 0)} leads, drafted {counts.get('drafted', 0)}, "
+            f"auto-sent {counts.get('sent', 0)}, blocked {counts.get('blocked', 0)} for "
+            f"quality. Reply rate {reply_rate}% on {sent_total} sends. "
+            f"{ds.get('hot_leads', 0)} hot leads + {ds.get('follow_ups_due', 0)} "
+            f"follow-ups due. Recommendation: work the hot leads first; let "
+            f"autopilot keep hunting in the background."
+        )
+        source = 'template'
+    return {
+        'prose': text.strip(),
+        'numbers': counts,
+        'reply_rate_pct': reply_rate,
+        'replies': replies,
+        'sent_total': sent_total,
+        'is_running': is_running,
+        'pipeline': ds,
+        'hours': hours_back,
+        'source': source,
+    }
+
+
 def quality_review_draft(subject, body, lead_data):
     """Aqua reviews an autopilot-generated draft before it auto-sends.
 

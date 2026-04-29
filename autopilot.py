@@ -103,6 +103,33 @@ def add_recent_lead(lead_summary):
 # ============================================================================
 # Activity log — shows live what's happening
 # ============================================================================
+def aggregate_recent_activity(hours_back=24):
+    """Number-crunch the autopilot log + DB for the last N hours.
+    Used by Aqua's daily brief on the Today page."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff_dt = _dt.utcnow() - _td(hours=hours_back)
+    cutoff = cutoff_dt.isoformat()
+
+    log = read_log()
+    recent = [e for e in log if (e.get('time') or '') >= cutoff]
+    counts = {'added': 0, 'drafted': 0, 'sent': 0, 'queued': 0,
+              'blocked': 0, 'skipped': 0, 'error': 0, 'discovery': 0,
+              'research': 0}
+    for e in recent:
+        t = e.get('type', '')
+        if t in counts:
+            counts[t] += 1
+
+    state = get_state()
+    return {
+        'hours': hours_back,
+        'is_running': state.get('running', False),
+        'counts': counts,
+        'total_log_events': len(recent),
+        'sources_used': state.get('sources_used', {}),
+    }
+
+
 def log_event(event_type, message, lead_data=None):
     """Append to activity log (capped at 200 events)."""
     log = read_log()
