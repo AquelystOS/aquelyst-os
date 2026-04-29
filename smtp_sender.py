@@ -232,6 +232,61 @@ def _unsubscribe_token(email):
                     hashlib.sha256).hexdigest()[:16]
 
 
+def _click_tracking_token(draft_id, url):
+    """HMAC-signed token so click URLs can't be tampered with."""
+    import hmac, hashlib
+    secret = ''
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets'):
+            secret = _st.secrets.get('UNSUBSCRIBE_SECRET', '') or ''
+    except Exception:
+        pass
+    if not secret:
+        secret = 'aquelyst-tracking-fallback-2026'
+    msg = f"{draft_id}|{url}".encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()[:12]
+
+
+def _wrap_link_for_tracking(url, draft_id):
+    """Rewrite an outbound link through the OS's click tracker.
+    URL becomes https://aquelyst-os.streamlit.app/?action=click&d=DRAFTID&u=URL&t=TOKEN.
+    Streamlit handles the URL → records the click → redirects to the real URL.
+    """
+    if not url or not draft_id:
+        return url
+    if url.startswith(('mailto:', 'tel:', '#')):
+        return url  # don't rewrite these
+    import urllib.parse as _up
+    base = _public_app_url()
+    token = _click_tracking_token(draft_id, url)
+    qu = _up.quote(url, safe='')
+    return f"{base}/?action=click&d={draft_id}&u={qu}&t={token}"
+
+
+def _rewrite_links_in_html(html, draft_id):
+    """Rewrite every <a href="..."> in an HTML body so clicks route
+    through the tracker. Skips relative + mailto + tel + the unsubscribe
+    link itself (no point tracking unsubscribe clicks)."""
+    import re
+    if not html or not draft_id:
+        return html
+
+    def repl(m):
+        full = m.group(0)
+        url = m.group(1)
+        if url.startswith(('mailto:', 'tel:', '#', '/')):
+            return full
+        if 'action=unsubscribe' in url:
+            return full  # leave unsubscribe link alone
+        if 'action=click' in url:
+            return full  # already tracked (don't double-wrap)
+        wrapped = _wrap_link_for_tracking(url, draft_id)
+        return full.replace(url, wrapped)
+
+    return re.sub(r'href=["\']([^"\']+)["\']', repl, html)
+
+
 def _build_can_spam_footer(to_email, plain=True):
     """Append the legally-required CAN-SPAM footer to every cold/automated
     email: physical address + one-click unsubscribe link.
@@ -261,7 +316,8 @@ def _build_can_spam_footer(to_email, plain=True):
     )
 
 
-def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_pixel_url=None):
+def send_email(to_email, subject, body, body_html=None, reply_to=None,
+                tracking_pixel_url=None, draft_id=None):
     """
     Send email via configured SMTP for the CURRENTLY LOGGED-IN user.
     Returns (success, message).
@@ -320,6 +376,9 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_
 
         if body_html or tracking_pixel_url:
             html_body = body_html or body.replace('\n', '<br>')
+            # Click-tracking: wrap any <a href> the body contains
+            if draft_id:
+                html_body = _rewrite_links_in_html(html_body, draft_id)
             html_body += html_footer
             if tracking_pixel_url:
                 html_body += f'<br><img src="{tracking_pixel_url}" width="1" height="1" style="display:none">'
@@ -329,7 +388,10 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_
         else:
             # Always include an HTML alternative so the unsubscribe link
             # renders as a proper hyperlink (better deliverability + UX)
-            html_body = body.replace('\n', '<br>') + html_footer
+            html_body = body.replace('\n', '<br>')
+            if draft_id:
+                html_body = _rewrite_links_in_html(html_body, draft_id)
+            html_body += html_footer
             html_part = MIMEText(html_body, 'html')
             msg.attach(html_part)
 

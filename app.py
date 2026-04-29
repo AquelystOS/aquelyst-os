@@ -260,6 +260,86 @@ def _check_password():
     return False
 
 
+def _handle_click_tracking_if_requested():
+    """If the URL has ?action=click&d=DRAFTID&u=URL&t=TOKEN, log the click
+    and redirect to the actual URL. Handled BEFORE the team-password gate
+    so prospects don't need login to click links in their cold emails."""
+    qp = st.query_params
+    if qp.get('action') != 'click':
+        return
+    import urllib.parse as _up
+    draft_id_str = qp.get('d', '')
+    encoded_url = qp.get('u', '')
+    token = qp.get('t', '')
+    try:
+        draft_id = int(draft_id_str)
+    except Exception:
+        draft_id = None
+    try:
+        target_url = _up.unquote(encoded_url)
+    except Exception:
+        target_url = ''
+
+    # Validate token (HMAC of draft_id + url)
+    import smtp_sender as _sm
+    expected = _sm._click_tracking_token(draft_id or '', target_url) if (draft_id and target_url) else ''
+    if not draft_id or not target_url or not expected or token != expected:
+        st.html(
+            "<div style='max-width:480px;margin:5rem auto;text-align:center;"
+            "background:#fff;border:1px solid #e5e7eb;border-radius:14px;"
+            "padding:2rem;'><h1 style='color:#0a0f1c'>Invalid link</h1>"
+            "<p style='color:#475569'>This tracking link is malformed.</p></div>"
+        )
+        st.stop()
+
+    # Look up the lead from the draft for richer attribution
+    lead_id = None
+    try:
+        conn = database.get_connection()
+        c = conn.cursor()
+        c.execute('SELECT lead_id FROM outreach_drafts WHERE id = ?', (draft_id,))
+        row = c.fetchone()
+        if row:
+            lead_id = row['lead_id']
+        conn.close()
+    except Exception:
+        pass
+
+    # Record the click event
+    try:
+        database.record_email_event('click', draft_id=draft_id,
+                                     lead_id=lead_id, url=target_url)
+    except Exception:
+        pass
+    try:
+        if lead_id:
+            database.log_activity(lead_id, 'email_click',
+                                   f"🖱 Clicked: {target_url[:120]}")
+    except Exception:
+        pass
+
+    # Redirect via meta refresh + JS (Streamlit can't do HTTP 302)
+    safe_url = target_url.replace('"', '%22')
+    st.html(
+        f'<meta http-equiv="refresh" content="0;url={safe_url}">'
+        f'<script>window.location.replace({_url_for_js(target_url)});</script>'
+        f'<div style="max-width:480px;margin:5rem auto;text-align:center;'
+        f'background:#fff;border:1px solid #e5e7eb;border-radius:14px;'
+        f'padding:2rem"><div style="font-size:2rem">↗</div>'
+        f'<h2 style="color:#0a0f1c">Redirecting...</h2>'
+        f'<p style="color:#475569">If you are not redirected, '
+        f'<a href="{safe_url}" style="color:#06b6d4">click here</a>.</p>'
+        f'</div>'
+    )
+    st.stop()
+
+
+def _url_for_js(url):
+    """JSON-encode a URL for safe insertion into a JS string literal."""
+    import json as _json
+    return _json.dumps(url)
+
+
 def _handle_unsubscribe_or_redirect_if_requested():
     """If the URL contains ?action=unsubscribe&e=...&t=..., handle it BEFORE
     the team-password gate so prospects can unsubscribe without knowing the
@@ -339,6 +419,7 @@ def _handle_unsubscribe_or_redirect_if_requested():
     st.stop()
 
 
+_handle_click_tracking_if_requested()
 _handle_unsubscribe_or_redirect_if_requested()
 if not _check_password():
     st.stop()

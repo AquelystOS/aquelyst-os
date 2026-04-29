@@ -288,10 +288,11 @@ def engage_lead_initial(lead, auto_send=False):
         # else: verdict == 'send' — fall through to actual send
 
     if auto_send:
-        # Approve + send
+        # Approve + send (draft_id passed for click-tracking link rewriting)
         database.approve_draft(draft_id)
         success, send_msg = smtp_sender.send_email(
-            lead['email'], result['subject'], result['body']
+            lead['email'], result['subject'], result['body'],
+            draft_id=draft_id,
         )
         if success:
             database.mark_draft_sent(draft_id)
@@ -421,7 +422,8 @@ def engage_lead_followup(lead, auto_send=False):
     if auto_send:
         database.approve_draft(draft_id)
         success, _ = smtp_sender.send_email(
-            lead['email'], result['subject'], result['body']
+            lead['email'], result['subject'], result['body'],
+            draft_id=draft_id,
         )
         if success:
             database.mark_draft_sent(draft_id)

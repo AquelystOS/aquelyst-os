@@ -1592,6 +1592,67 @@ def get_follow_ups_due():
     conn.close()
     return leads
 
+def init_email_tracking_table():
+    """Idempotent CREATE TABLE for click + open events. Called lazily from
+    the tracking helpers so we don't have to touch init_db()."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS email_tracking_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            draft_id INTEGER,
+            lead_id INTEGER,
+            url TEXT,
+            user_agent TEXT,
+            ip_hash TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_track_draft ON email_tracking_events(draft_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_track_lead ON email_tracking_events(lead_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_track_event ON email_tracking_events(event_type)')
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def record_email_event(event_type, draft_id=None, lead_id=None, url=None,
+                        user_agent=None, ip_hash=None):
+    """Record an email open / click event."""
+    init_email_tracking_table()
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT INTO email_tracking_events
+                      (event_type, draft_id, lead_id, url, user_agent, ip_hash)
+                      VALUES (?, ?, ?, ?, ?, ?)''',
+                   (event_type, draft_id, lead_id,
+                    (url or '')[:500], (user_agent or '')[:200],
+                    (ip_hash or '')[:64]))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def get_tracking_for_draft(draft_id):
+    """Return all tracking events for one draft (used by inbox detail view)."""
+    if not draft_id:
+        return []
+    init_email_tracking_table()
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT event_type, url, created_at
+                  FROM email_tracking_events
+                  WHERE draft_id = ? ORDER BY created_at''', (draft_id,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
 def has_inbound_messages(lead_id):
     """True if this lead has ever replied (any inbound_message linked).
     Used by smart-cadence to skip auto-follow-up on already-engaged
