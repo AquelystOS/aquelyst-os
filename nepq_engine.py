@@ -843,6 +843,36 @@ def generate_initial_outreach(lead_data):
     except Exception:
         pass
 
+    # Voice-matching: include this sender's last few sent drafts as
+    # few-shot examples so Aqua writes in HIS or HER actual style instead
+    # of a generic AI voice. Each founder has a different rhythm; this
+    # keeps the prospect from getting a "wait, that doesn't sound like
+    # Joseph" feeling. Falls through silently if no prior sends.
+    voice_block = ""
+    try:
+        if me_email:
+            import database as _db
+            prior = _db.get_recent_sends_by_sender(me_email, limit=3)
+            if prior:
+                examples = []
+                for i, p in enumerate(prior):
+                    subj = (p.get('subject') or '?')[:90]
+                    body = (p.get('content') or '')[:550]
+                    examples.append(
+                        f"EXAMPLE {i+1}:\nSubject: {subj}\nBody:\n{body}"
+                    )
+                voice_block = (
+                    f"\n## YOUR VOICE (match this style — these are real "
+                    f"emails you've sent before):\n"
+                    f"{chr(10).join('---' + chr(10) + e for e in examples)}\n\n"
+                    f"INSTRUCTION: Write the new email in the SAME voice as "
+                    f"the examples above. Match opening patterns, sign-off "
+                    f"style, sentence rhythm, formality level, contraction "
+                    f"usage. Don't copy phrasing — channel the rhythm.\n"
+                )
+    except Exception:
+        pass
+
     name_line = (
         f"- Contact (first name): {first_name}"
         if has_name else
@@ -875,7 +905,7 @@ PROSPECT:
 - Location: {location or 'unknown'}
 - Known pain/problem: {pain or 'unknown — you may need to use a generic curiosity opener'}
 - Personalized hook from research: {hook or 'none'}
-{research_block}{peer_warning}
+{research_block}{voice_block}{peer_warning}
 YOU ARE: {current_user['name']} ({current_user['role']}) — sign off as "{sender_first}"
 
 EMAIL REQUIREMENTS:

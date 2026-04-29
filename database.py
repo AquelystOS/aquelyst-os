@@ -1592,6 +1592,30 @@ def get_follow_ups_due():
     conn.close()
     return leads
 
+def get_recent_sends_by_sender(sender_email, limit=3):
+    """Last N sent drafts by a specific user — used as few-shot voice
+    examples in Aqua's prompt so she mimics each user's actual style.
+
+    Filters out templates / fallbacks and very short bodies (< 60 chars)
+    that wouldn't help a model learn voice."""
+    if not sender_email:
+        return []
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''SELECT subject, content, message_type, created_at
+                  FROM outreach_drafts
+                  WHERE sent = 1
+                    AND COALESCE(sent_by, '') = ?
+                    AND content IS NOT NULL
+                    AND length(content) >= 60
+                  ORDER BY created_at DESC
+                  LIMIT ?''',
+               (sender_email.lower(), limit))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
 def cold_email_performance_stats(days=30):
     """Aggregate cold-email performance for the Admin → Performance panel.
 
