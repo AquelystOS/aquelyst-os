@@ -161,6 +161,37 @@ def find_followup_candidates():
     return candidates
 
 
+def _within_business_hours():
+    """Returns (allowed: bool, reason: str). Auto-sends are blocked
+    8pm-7am ET and on weekends to:
+      • protect domain reputation (bot-pattern overnight sends get
+        spam-flagged by major mail systems)
+      • respect prospect attention (cold emails sent at 3am EST
+        almost never get read; opens cluster Tue-Thu 8-11am)
+    The draft is still SAVED — just not auto-sent. Human can send
+    manually anytime. Override via st.secrets['DISABLE_SEND_GUARD'] = true.
+    """
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets') and _st.secrets.get('DISABLE_SEND_GUARD'):
+            return True, ''
+    except Exception:
+        pass
+    try:
+        import ui_kit
+        now = ui_kit.now_et()
+    except Exception:
+        from datetime import datetime as _dt
+        now = _dt.now()
+    weekday = now.weekday()  # 0=Mon, 6=Sun
+    hour = now.hour
+    if weekday >= 5:  # Saturday/Sunday
+        return False, f"weekend ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][weekday]} {hour:02d}:00 ET)"
+    if hour < 7 or hour >= 20:
+        return False, f"outside business hours ({hour:02d}:00 ET — sends queue 7am-8pm ET Mon-Fri)"
+    return True, ''
+
+
 def engage_lead_initial(lead, auto_send=False):
     """Send the FIRST NEPQ-style email to a lead."""
     log_event('engaging', f"💌 Engaging {lead['business_name']} (score {lead['lead_score']})")
@@ -177,6 +208,21 @@ def engage_lead_initial(lead, auto_send=False):
         lead['id'], 'nepq_initial',
         result['subject'], result['body']
     )
+
+    # Send-time guardrail — even if auto_send=True, only fire during
+    # business hours. Outside that window, downgrade to "drafted" so the
+    # team can review + send Monday morning.
+    allowed, reason = _within_business_hours()
+    if auto_send and not allowed:
+        database.update_lead(lead['id'], status='drafted')
+        database.log_activity(lead['id'], 'auto_engagement_drafted',
+                               f"NEPQ initial drafted (auto-send blocked: {reason})")
+        increment_stat('initial_emails_drafted')
+        log_event('queued',
+                   f"⏸ Queued (not auto-sent: {reason}) — {lead['business_name']}",
+                   details={'lead_id': lead['id'], 'draft_id': draft_id,
+                            'reason': reason})
+        return draft_id
 
     if auto_send:
         # Approve + send
@@ -246,6 +292,18 @@ def engage_lead_followup(lead, auto_send=False):
         lead['id'], f'nepq_followup_{touch_number}',
         result['subject'], result['body']
     )
+
+    # Same business-hours guardrail as the initial-engagement path
+    allowed, reason = _within_business_hours()
+    if auto_send and not allowed:
+        database.log_activity(lead['id'], 'auto_followup_drafted',
+                               f"Followup #{touch_number} drafted (auto-send blocked: {reason})")
+        increment_stat('followups_drafted')
+        log_event('queued',
+                   f"⏸ Followup #{touch_number} queued (not auto-sent: {reason}) — {lead['business_name']}",
+                   details={'lead_id': lead['id'], 'draft_id': draft_id,
+                            'reason': reason})
+        return draft_id
 
     if auto_send:
         database.approve_draft(draft_id)
