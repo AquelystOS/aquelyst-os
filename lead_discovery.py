@@ -302,26 +302,94 @@ def discover_via_openstreetmap(business_type, location=None, max_results=50):
     Searches for OSM nodes/ways tagged with horse-related amenities.
     """
 
-    # OSM tags that match horse businesses
+    # OSM tags by business vertical. If no mapping matches, OSM is skipped
+    # entirely for that business type (no more "default to equestrian" trap
+    # that was making 'oil refinery' searches return horse barns).
     osm_tag_queries = {
+        # Equine
         'horse boarding facility': '["sport"="equestrian"]',
-        'equestrian center': '["sport"="equestrian"]',
-        'horse stable': '["leisure"="horse_riding"]',
-        'horse riding': '["leisure"="horse_riding"]',
-        'horse trainer': '["sport"="equestrian"]',
-        'horse breeder': '["sport"="equestrian"]',
-        'horse rescue': '["amenity"="animal_shelter"]["animal"="horse"]',
-        'tack shop': '["shop"="pet"]',  # close approximation
-        'feed store': '["shop"="agrarian"]',
+        'equestrian center':       '["sport"="equestrian"]',
+        'horse stable':            '["leisure"="horse_riding"]',
+        'horse riding':            '["leisure"="horse_riding"]',
+        'horse trainer':           '["sport"="equestrian"]',
+        'horse breeder':           '["sport"="equestrian"]',
+        'horse rescue':            '["amenity"="animal_shelter"]["animal"="horse"]',
+        'tack shop':               '["shop"="pet"]',
+        'feed store':              '["shop"="agrarian"]',
+        # Pets
+        'kennel':                  '["amenity"="animal_boarding"]',
+        'dog boarding':            '["amenity"="animal_boarding"]',
+        'doggy daycare':           '["amenity"="animal_boarding"]',
+        'pet hotel':               '["amenity"="animal_boarding"]',
+        'animal shelter':          '["amenity"="animal_shelter"]',
+        'humane society':          '["amenity"="animal_shelter"]',
+        'animal rescue':           '["amenity"="animal_shelter"]',
+        'veterinary':              '["amenity"="veterinary"]',
+        'vet clinic':              '["amenity"="veterinary"]',
+        'pet store':               '["shop"="pet"]',
+        'grooming':                '["shop"="pet_grooming"]',
+        # SpillMaster (industrial / commercial)
+        'oil refinery':            '["industrial"="oil"]',
+        'refinery':                '["industrial"="oil"]',
+        'food processing':         '["industrial"="food"]',
+        'meat processing':         '["industrial"="slaughterhouse"]',
+        'meat packing':            '["industrial"="slaughterhouse"]',
+        'dairy processing':        '["industrial"="dairy"]',
+        'brewery':                 '["craft"="brewery"]',
+        'winery':                  '["craft"="winery"]',
+        'distillery':              '["craft"="distillery"]',
+        'hospital':                '["amenity"="hospital"]',
+        'nursing home':            '["amenity"="nursing_home"]',
+        'assisted living':         '["amenity"="social_facility"]["social_facility"="assisted_living"]',
+        'manufacturing':           '["industrial"="factory"]',
+        'chemical plant':          '["industrial"="chemical"]',
+        'water treatment':         '["man_made"="wastewater_plant"]',
+        'wastewater':              '["man_made"="wastewater_plant"]',
+        'sewage':                  '["man_made"="wastewater_plant"]',
+        'landfill':                '["landuse"="landfill"]',
+        # AMR
+        'car dealer':              '["shop"="car"]',
+        'auto dealer':             '["shop"="car"]',
+        'rv':                      '["shop"="caravan"]',
+        'rv dealer':               '["shop"="caravan"]',
+        'boat dealer':             '["shop"="boat"]',
+        'marina':                  '["leisure"="marina"]',
+        'truck stop':              '["amenity"="truck_stop"]',
+        'gas station':             '["amenity"="fuel"]',
+        'fuel':                    '["amenity"="fuel"]',
+        'aviation':                '["aeroway"="aerodrome"]',
+        'airport':                 '["aeroway"="aerodrome"]',
+        # HouseHold
+        'apartment':               '["building"="apartments"]',
+        'condo':                   '["building"="apartments"]',
+        'hotel':                   '["tourism"="hotel"]',
+        'motel':                   '["tourism"="motel"]',
+        # Inversion Misting / agriculture
+        'poultry farm':            '["landuse"="farmyard"]["produce"="poultry"]',
+        'dairy farm':              '["landuse"="farmyard"]["produce"="milk"]',
+        'farm':                    '["landuse"="farmyard"]',
+        'feedlot':                 '["landuse"="farmyard"]["produce"="livestock"]',
+        'cattle':                  '["landuse"="farmyard"]["produce"="livestock"]',
+        'aquaculture':             '["landuse"="aquaculture"]',
+        'fish farm':               '["landuse"="aquaculture"]',
+        'greenhouse':              '["building"="greenhouse"]',
+        'warehouse':               '["building"="warehouse"]',
+        'cold storage':            '["industrial"="cold_storage"]',
     }
 
     tag_query = None
-    for key, query in osm_tag_queries.items():
-        if key in business_type.lower():
-            tag_query = query
+    bt_lower = business_type.lower().strip()
+    # Most specific match first (longer keys first so e.g. "oil refinery"
+    # wins over a hypothetical generic "oil" entry).
+    for key in sorted(osm_tag_queries.keys(), key=len, reverse=True):
+        if key in bt_lower:
+            tag_query = osm_tag_queries[key]
             break
     if not tag_query:
-        tag_query = '["sport"="equestrian"]'  # default fallback
+        # No OSM tag mapping for this business type — skip OSM entirely.
+        # Other sources (DDG/Bing/AI knowledge) will handle it. Returning
+        # empty list keeps callers happy.
+        return []
 
     # Geocode location → bounding box, or use country-wide search
     bbox = None
@@ -565,16 +633,17 @@ def discover_via_ai_knowledge(business_type, location, max_results=30):
 
     location_str = f"in {location}" if location else "across the United States"
 
-    # Few-shot prompt that works reliably with qwen
+    # Few-shot prompt — examples are FORMAT-only placeholders so the model
+    # isn't biased toward horse businesses regardless of business_type.
     prompt = f"""List {max_results} REAL {business_type}s {location_str}. Output ONLY a JSON array — no other text.
 
 Required format (start with [ and end with ]):
 [
-{{"name":"Keene Ridge Farm","city":"Lexington","state":"KY","website":"keeneridgefarm.com"}},
-{{"name":"Stone Columns Stables","city":"Lexington","state":"KY","website":"stonecolumnsstables.com"}}
+{{"name":"Real Business Name 1","city":"City","state":"ST","website":"example1.com"}},
+{{"name":"Real Business Name 2","city":"City","state":"ST","website":"example2.com"}}
 ]
 
-Continue with {max_results} more real {business_type}s {location_str}. Use real businesses you know about.
+Continue with {max_results} REAL {business_type}s {location_str}. Use real, specific businesses you know about — not generic placeholders. Match the business type exactly.
 Just the JSON array, no markdown fences:"""
 
     try:
@@ -1666,10 +1735,6 @@ def _generate_query_variations(business_type, location):
         # With contact intent
         f"{business_type}{location_part} contact owner",
         f"{business_type}{location_part} phone email",
-        # Variations with horse-related synonyms
-        f"barn{location_part} {business_type}",
-        f"equestrian{location_part} {type_singular}",
-        f"horse facility{location_part}",
         # Local-business-style
         f"best {business_type}{location_part}",
         f"top {business_type}{location_part}",
@@ -1681,6 +1746,42 @@ def _generate_query_variations(business_type, location):
         f"{business_type}{location_part} family owned",
         f"{business_type}{location_part} private",
     ]
+
+    # Vertical-aware synonyms: only add equestrian terms for actual equine
+    # business types — for "oil refinery" / "kennel" / "warehouse" etc. these
+    # would just pollute the results with unrelated horse stuff.
+    product = _guess_product_from_type(business_type)
+    if product == 'Duo Equine':
+        queries.extend([
+            f"barn{location_part} {business_type}",
+            f"equestrian{location_part} {type_singular}",
+            f"horse facility{location_part}",
+        ])
+    elif product == 'Pets':
+        queries.extend([
+            f"animal{location_part} {business_type}",
+            f"pet care{location_part} {type_singular}",
+        ])
+    elif product == 'SpillMaster':
+        queries.extend([
+            f"industrial{location_part} {business_type}",
+            f"commercial{location_part} {type_singular}",
+        ])
+    elif product == 'AMR':
+        queries.extend([
+            f"fleet{location_part} {business_type}",
+            f"dealership{location_part} {type_singular}",
+        ])
+    elif product == 'HouseHold':
+        queries.extend([
+            f"residential{location_part} {business_type}",
+            f"property{location_part} {type_singular}",
+        ])
+    elif product == 'Inversion Misting':
+        queries.extend([
+            f"agricultural{location_part} {business_type}",
+            f"farm operation{location_part} {type_singular}",
+        ])
     return queries
 
 

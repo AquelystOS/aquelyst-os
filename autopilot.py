@@ -189,7 +189,20 @@ def process_candidate(candidate, config):
     osm_data = candidate.get('_osm_data', False)
 
     if osm_data and not osm_website:
-        # OSM has metadata but no website — create minimal lead from OSM tags
+        # OSM has metadata but no website — create minimal lead from OSM tags.
+        # The business_type / pain / product_fit come from the actual hunt
+        # category the user selected (no longer hardcoded to "horse facility"
+        # — that was a bug that mis-tagged every OSM lead as equine).
+        biz_type_from_hunt = (candidate.get('source_query') or '').strip() or 'business'
+        product_fit = lead_discovery._guess_product_from_type(biz_type_from_hunt) or None
+        pain_by_product = {
+            'Duo Equine':         f'{biz_type_from_hunt} — likely manages stalls, manure, fly control',
+            'Pets':               f'{biz_type_from_hunt} — likely manages pet odors, kennel cough, urine',
+            'SpillMaster':        f'{biz_type_from_hunt} — likely manages spills, biohazards, sanitation',
+            'AMR':                f'{biz_type_from_hunt} — likely manages fleet odor, mold, smoke',
+            'HouseHold':          f'{biz_type_from_hunt} — likely manages residential odor, mold, pet smells',
+            'Inversion Misting':  f'{biz_type_from_hunt} — likely manages large-facility ammonia, fly burden',
+        }
         lead_data = {
             'business_name': candidate.get('title', 'Unknown'),
             'contact_name': None,
@@ -198,11 +211,11 @@ def process_candidate(candidate, config):
             'website': None,
             'city': candidate.get('_osm_city') or None,
             'state': candidate.get('_osm_state') or None,
-            'business_type': 'horse facility (from OSM)',
+            'business_type': f"{biz_type_from_hunt} (from OSM)",
             'lead_source': 'autopilot_osm',
             'source_channel': candidate.get('source_query', 'openstreetmap'),
-            'pain_hypothesis': 'Horse facility — likely manages stalls, manure, fly control',
-            'product_fit': 'Duo Equine',
+            'pain_hypothesis': pain_by_product.get(product_fit, f"{biz_type_from_hunt} — manual research recommended"),
+            'product_fit': product_fit,
             'notes': f"📍 Discovered via OpenStreetMap. May need manual research for personalized outreach.",
         }
 
@@ -223,7 +236,7 @@ def process_candidate(candidate, config):
                 'city': clean_lead.get('city'),
                 'state': clean_lead.get('state'),
                 'score': score,
-                'hook': f"OSM-listed horse facility in {clean_lead.get('city') or 'unknown'}",
+                'hook': f"OSM-listed {biz_type_from_hunt} in {clean_lead.get('city') or 'unknown'}",
                 'source': 'OpenStreetMap',
                 'discovered_at': datetime.now().isoformat(),
             })
