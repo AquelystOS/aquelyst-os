@@ -1727,11 +1727,24 @@ def _admin_keys_section():
     if used:
         total_all = sum(t for _, t, _, _ in used) or 1
         st.markdown("**📊 Load distribution (since last reset)**")
+
+        def _gradient_color_at(pct):
+            """Lerp cyan #06b6d4 → lime #a3e635 along usage %.
+            Low load → cool cyan; high load → bright lime. Visual cue
+            for which provider is doing the heavy lifting at a glance."""
+            t = max(0.0, min(1.0, pct / 100))
+            r = int(6 + (163 - 6) * t)
+            g = int(182 + (230 - 182) * t)
+            b = int(212 + (53 - 212) * t)
+            return f"rgb({r},{g},{b})"
+
         cols = st.columns(len(used))
         for col, (pid, total, ok, err) in zip(cols, used):
             pct = round(100 * total / total_all)
             success_pct = round(100 * ok / total) if total else 0
             color = '#16a34a' if success_pct >= 90 else '#f59e0b' if success_pct >= 60 else '#dc2626'
+            # Brand-aligned text color tied to usage intensity
+            usage_color = _gradient_color_at(pct)
             col.markdown(
                 f"<div style='text-align:center;padding:0.4rem 0.2rem'>"
                 # Conic-gradient ring — arc length = % of load, color = health
@@ -1751,11 +1764,13 @@ def _admin_keys_section():
                 f"text-transform:uppercase;letter-spacing:0.08em;"
                 f"margin-top:0.15rem'>req</div>"
                 f"</div></div>"
-                # Provider name + load % + health below
-                f"<div style='font-size:0.72rem;color:#64748b;text-transform:uppercase;"
+                # Provider name on dark bg → light slate
+                f"<div style='font-size:0.72rem;color:#cbd5e1;text-transform:uppercase;"
                 f"letter-spacing:0.06em;font-weight:700'>{pid}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.25rem;"
-                f"font-weight:700;color:#0a0f1c;margin-top:0.15rem;line-height:1'>"
+                # Load % — gradient cyan→lime by usage, with subtle glow
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;"
+                f"font-weight:800;color:{usage_color};margin-top:0.15rem;"
+                f"line-height:1;text-shadow:0 0 12px {usage_color}66'>"
                 f"{pct}%</div>"
                 f"<div style='font-size:0.65rem;color:#94a3b8;margin-top:0.1rem'>"
                 f"of load</div>"
