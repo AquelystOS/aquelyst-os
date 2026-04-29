@@ -1267,7 +1267,8 @@ def show_admin_console():
 
     sections = st.tabs(["👥 Team", "🛡 Admins", "🔑 API Keys",
                           "🧠 Aqua Memory", "🗑 Junk Patterns",
-                          "💬 Chat Logs", "📊 Usage", "🗄 Database"])
+                          "💬 Chat Logs", "📈 Performance",
+                          "📊 Usage", "🗄 Database"])
 
     with sections[0]:
         _admin_team_section()
@@ -1282,8 +1283,10 @@ def show_admin_console():
     with sections[5]:
         _admin_chatlogs_section()
     with sections[6]:
-        _admin_usage_section()
+        _admin_performance_section()
     with sections[7]:
+        _admin_usage_section()
+    with sections[8]:
         _admin_database_section()
 
 
@@ -2103,6 +2106,109 @@ def _admin_chatlogs_section():
                          key=f"adm_wipe_chat_{selected[0]}"):
                 database.aqua_clear_chat(selected[0])
                 st.rerun()
+
+
+def _admin_performance_section():
+    """Reply-rate dashboard — what's actually working in cold outreach."""
+    st.html(
+        "<div style='display:flex;align-items:center;gap:0.6rem;margin-bottom:0.7rem'>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+        "color:#06b6d4;letter-spacing:0.18em;text-transform:uppercase;"
+        "font-weight:700'>◢ COLD-EMAIL PERFORMANCE</div>"
+        "<div style='flex:1;height:1px;background:linear-gradient(90deg,"
+        "rgba(6,182,212,0.40),rgba(6,182,212,0))'></div></div>"
+        "<div style='color:#cbd5e1;font-size:0.85rem;line-height:1.4;"
+        "margin-bottom:1rem'>What's actually getting replies. Use this to "
+        "kill what doesn't work and double down on what does — the only way "
+        "Aqua learns over time is if you watch the data.</div>"
+    )
+
+    days = st.selectbox("Lookback window", [7, 14, 30, 60, 90], index=2,
+                         key="perf_lookback")
+    stats = database.cold_email_performance_stats(days=days)
+    t = stats['totals']
+
+    if t['sent'] == 0:
+        st.info(f"No sends in the last {days} days. Once Aqua sends a few "
+                 "cold emails, this panel will fill in with reply-rate data "
+                 "per subject line, sender, and message type.")
+        return
+
+    # ===== TOP-LINE NUMBERS =====
+    cols = st.columns(4)
+    cols[0].metric("Sent", t['sent'])
+    cols[1].metric("Leads contacted", t['leads_contacted'])
+    cols[2].metric("Replies", t['replies'])
+    rate_color = '🟢' if t['reply_rate_pct'] >= 5 else '🟡' if t['reply_rate_pct'] >= 2 else '🔴'
+    cols[3].metric(f"{rate_color} Reply rate", f"{t['reply_rate_pct']}%")
+
+    st.caption("_Industry benchmark: 1-3% is typical for cold; 5%+ is good; "
+                "10%+ is exceptional. These rates count UNIQUE leads contacted "
+                "→ unique leads who replied._")
+
+    st.markdown("---")
+
+    # ===== BY SENDER (who's converting?) =====
+    st.markdown("##### Per-sender performance")
+    if not stats['by_sender']:
+        st.caption("_No sender data yet._")
+    else:
+        for s in stats['by_sender']:
+            sender_label = s['sender'] if s['sender'] != '?' else '(legacy / unattributed)'
+            color = '#10b981' if s['reply_rate'] >= 5 else '#f59e0b' if s['reply_rate'] >= 2 else '#ef4444'
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 2])
+                c1.markdown(f"**{sender_label}**")
+                c1.caption(f"{s['sent_n']} sent · {s['leads_n']} unique leads · {s['replies']} replies")
+                c2.markdown(
+                    f"<div style='text-align:right;font-family:JetBrains Mono,monospace;"
+                    f"font-size:1.5rem;font-weight:700;color:{color}'>"
+                    f"{s['reply_rate']}%</div>",
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown("---")
+
+    # ===== BY MESSAGE TYPE (what kind of email works?) =====
+    st.markdown("##### Reply rate by message type")
+    if not stats['by_message_type']:
+        st.caption("_No message-type data yet._")
+    else:
+        for m in stats['by_message_type']:
+            mt = (m['message_type'] or 'unknown').replace('_', ' ').title()
+            color = '#10b981' if m['reply_rate'] >= 5 else '#f59e0b' if m['reply_rate'] >= 2 else '#ef4444'
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 2])
+                c1.markdown(f"**{mt}**")
+                c1.caption(f"{m['sent_n']} sent · {m['leads_n']} unique leads · {m['replies']} replies")
+                c2.markdown(
+                    f"<div style='text-align:right;font-family:JetBrains Mono,monospace;"
+                    f"font-size:1.5rem;font-weight:700;color:{color}'>"
+                    f"{m['reply_rate']}%</div>",
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown("---")
+
+    # ===== TOP SUBJECTS =====
+    st.markdown("##### Top-performing subject lines (3+ sends)")
+    if not stats['top_subjects']:
+        st.caption("_Need at least 3 sends per subject line to surface here. "
+                    "Keep going — patterns emerge after ~30 sends total._")
+    else:
+        for s in stats['top_subjects'][:10]:
+            color = '#10b981' if s['reply_rate'] >= 5 else '#f59e0b' if s['reply_rate'] >= 2 else '#ef4444'
+            subj = s['subject'][:120] + ('...' if len(s['subject']) > 120 else '')
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"`{subj}`")
+                c1.caption(f"{s['sent_n']} sent · {s['leads_n']} unique · {s['replies']} replies")
+                c2.markdown(
+                    f"<div style='text-align:right;font-family:JetBrains Mono,monospace;"
+                    f"font-size:1.3rem;font-weight:700;color:{color}'>"
+                    f"{s['reply_rate']}%</div>",
+                    unsafe_allow_html=True,
+                )
 
 
 def _admin_usage_section():

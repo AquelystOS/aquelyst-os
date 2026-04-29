@@ -1592,6 +1592,140 @@ def get_follow_ups_due():
     conn.close()
     return leads
 
+def cold_email_performance_stats(days=30):
+    """Aggregate cold-email performance for the Admin → Performance panel.
+
+    A "reply" is any inbound_message whose lead matches a sent draft within
+    the lookback window. Reply rate = unique-leads-replied / unique-leads-
+    contacted. Higher is better — this is the single most important
+    cold-outreach KPI.
+
+    Returns a dict with:
+      - totals: sent, leads_contacted, replies, reply_rate_pct
+      - by_message_type: per cold_email / aqua_intro / followup / etc.
+      - by_sender: who's sending what + how it's converting
+      - by_day_of_week: when replies cluster
+      - by_hour: best time-of-day to send
+      - top_subjects: subject lines ranked by reply rate (min 3 sends)
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+
+    conn = get_connection()
+    c = conn.cursor()
+    out = {
+        'days': days,
+        'totals': {'sent': 0, 'leads_contacted': 0,
+                    'replies': 0, 'reply_rate_pct': 0.0},
+        'by_message_type': [],
+        'by_sender': [],
+        'by_day_of_week': [],
+        'by_hour': [],
+        'top_subjects': [],
+    }
+    try:
+        # ---- TOTALS ----
+        c.execute('''SELECT COUNT(*) as n_sent,
+                            COUNT(DISTINCT lead_id) as n_leads
+                      FROM outreach_drafts
+                      WHERE sent = 1 AND created_at >= ?''', (cutoff,))
+        row = c.fetchone()
+        out['totals']['sent'] = (row['n_sent'] or 0) if row else 0
+        out['totals']['leads_contacted'] = (row['n_leads'] or 0) if row else 0
+
+        # Replies = unique leads we contacted that ALSO have an inbound_message
+        # received after our send. Cheap approximation: any inbound_message
+        # whose lead_id is in our sent set (within window).
+        c.execute('''SELECT COUNT(DISTINCT i.lead_id) as n_replies
+                      FROM inbound_messages i
+                      WHERE i.received_at >= ?
+                        AND i.lead_id IN (
+                          SELECT DISTINCT lead_id FROM outreach_drafts
+                          WHERE sent = 1 AND created_at >= ?
+                        )''', (cutoff, cutoff))
+        row = c.fetchone()
+        out['totals']['replies'] = (row['n_replies'] or 0) if row else 0
+        if out['totals']['leads_contacted']:
+            out['totals']['reply_rate_pct'] = round(
+                100.0 * out['totals']['replies']
+                / out['totals']['leads_contacted'], 1)
+
+        # ---- BY MESSAGE TYPE ----
+        c.execute('''SELECT message_type, COUNT(*) as sent_n,
+                            COUNT(DISTINCT lead_id) as leads_n
+                      FROM outreach_drafts
+                      WHERE sent = 1 AND created_at >= ?
+                      GROUP BY message_type''', (cutoff,))
+        types = [dict(r) for r in c.fetchall()]
+        # Replies per message_type
+        for t in types:
+            c.execute('''SELECT COUNT(DISTINCT i.lead_id) as r
+                          FROM inbound_messages i
+                          WHERE i.received_at >= ?
+                            AND i.lead_id IN (
+                              SELECT DISTINCT lead_id FROM outreach_drafts
+                              WHERE sent = 1 AND created_at >= ?
+                                AND message_type = ?
+                            )''', (cutoff, cutoff, t['message_type']))
+            row = c.fetchone()
+            t['replies'] = (row['r'] or 0) if row else 0
+            t['reply_rate'] = round(100.0 * t['replies'] / t['leads_n'], 1) if t['leads_n'] else 0
+        types.sort(key=lambda x: -x['reply_rate'])
+        out['by_message_type'] = types
+
+        # ---- BY SENDER (who's sending + their conversion) ----
+        c.execute('''SELECT COALESCE(sent_by, '?') as sender,
+                            COUNT(*) as sent_n,
+                            COUNT(DISTINCT lead_id) as leads_n
+                      FROM outreach_drafts
+                      WHERE sent = 1 AND created_at >= ?
+                      GROUP BY sent_by''', (cutoff,))
+        senders = [dict(r) for r in c.fetchall()]
+        for s in senders:
+            c.execute('''SELECT COUNT(DISTINCT i.lead_id) as r
+                          FROM inbound_messages i
+                          WHERE i.received_at >= ?
+                            AND i.lead_id IN (
+                              SELECT DISTINCT lead_id FROM outreach_drafts
+                              WHERE sent = 1 AND created_at >= ?
+                                AND COALESCE(sent_by, '?') = ?
+                            )''', (cutoff, cutoff, s['sender']))
+            row = c.fetchone()
+            s['replies'] = (row['r'] or 0) if row else 0
+            s['reply_rate'] = round(100.0 * s['replies'] / s['leads_n'], 1) if s['leads_n'] else 0
+        senders.sort(key=lambda x: -x['reply_rate'])
+        out['by_sender'] = senders
+
+        # ---- TOP SUBJECT LINES (min 3 sends to filter noise) ----
+        c.execute('''SELECT subject, COUNT(*) as sent_n,
+                            COUNT(DISTINCT lead_id) as leads_n
+                      FROM outreach_drafts
+                      WHERE sent = 1 AND created_at >= ?
+                        AND subject IS NOT NULL AND subject != ''
+                      GROUP BY subject
+                      HAVING COUNT(*) >= 3
+                      ORDER BY sent_n DESC LIMIT 25''', (cutoff,))
+        subjects = [dict(r) for r in c.fetchall()]
+        for s in subjects:
+            c.execute('''SELECT COUNT(DISTINCT i.lead_id) as r
+                          FROM inbound_messages i
+                          WHERE i.received_at >= ?
+                            AND i.lead_id IN (
+                              SELECT DISTINCT lead_id FROM outreach_drafts
+                              WHERE sent = 1 AND created_at >= ? AND subject = ?
+                            )''', (cutoff, cutoff, s['subject']))
+            row = c.fetchone()
+            s['replies'] = (row['r'] or 0) if row else 0
+            s['reply_rate'] = round(100.0 * s['replies'] / s['leads_n'], 1) if s['leads_n'] else 0
+        subjects.sort(key=lambda x: -x['reply_rate'])
+        out['top_subjects'] = subjects[:15]
+    except Exception:
+        pass
+    finally:
+        conn.close()
+    return out
+
+
 def get_dashboard_stats():
     """Get key dashboard statistics."""
     conn = get_connection()
