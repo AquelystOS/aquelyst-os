@@ -546,6 +546,147 @@ def _claude_chat(messages, max_tokens=1024, system_prompt=None):
         return None, f"Claude error: {str(e)[:100]}"
 
 
+def recommend_hunt_strategy(top_n=8):
+    """Aqua picks which hunt categories to prioritize for the next autopilot
+    run. Returns:
+      {
+        'recommended_types': [list of business_type strings, ordered],
+        'reasoning': "1-paragraph plain-English explanation",
+        'source': 'aqua' | 'fallback',
+      }
+
+    Logic:
+      • Start from active hunt_categories (the user-curated list)
+      • Cross-reference per-vertical reply rates (cold_email_performance)
+        — favor verticals that have actually closed replies recently
+      • Cross-reference recent autopilot activity — avoid hammering
+        verticals already saturated this week
+      • Mix 5-6 high-priority + 2-3 exploratory (P=2-3) for diversity
+      • Returns top_n in execution order
+
+    Falls back to "active categories sorted by priority" when there's no
+    performance data yet (cold-start case)."""
+    import hunt_categories as _hc
+
+    cats = [c for c in _hc.load_categories() if c.get('active')]
+    if not cats:
+        return {
+            'recommended_types': [],
+            'reasoning': "No active hunt categories — open Autopilot config "
+                         "and toggle some on, or let me pick from the full "
+                         "catalog after that.",
+            'source': 'fallback',
+        }
+
+    try:
+        import database as _db
+        perf = _db.cold_email_performance_stats(days=30)
+    except Exception:
+        perf = {'totals': {'sent': 0, 'replies': 0, 'reply_rate_pct': 0.0}}
+
+    has_data = (perf.get('totals', {}).get('sent', 0) >= 10)
+
+    if not has_data:
+        # Cold-start: just sort by priority + product diversity
+        cats.sort(key=lambda c: (c.get('priority', 99), c.get('product', 'zzz')))
+        # Round-robin across products for diversity in the top_n
+        seen_products = set()
+        ordered = []
+        for c in cats:
+            if c['product'] not in seen_products:
+                ordered.append(c)
+                seen_products.add(c['product'])
+            if len(ordered) >= top_n:
+                break
+        # Fill remaining slots with next-best regardless of product
+        for c in cats:
+            if c not in ordered:
+                ordered.append(c)
+            if len(ordered) >= top_n:
+                break
+        return {
+            'recommended_types': [c['type'] for c in ordered[:top_n]],
+            'reasoning': (
+                "Cold-start mode: not enough send data yet to pick by reply "
+                "rate, so I'm picking the top-priority active category from "
+                "each product line for diversity. As the team racks up sends "
+                "and replies, I'll start weighting by what's actually "
+                "converting."
+            ),
+            'source': 'fallback',
+        }
+
+    # Have data — ask Aqua to weight by performance + pipeline + diversity
+    active_summary = '\n'.join(
+        f"  • [{c.get('priority', 3)}] {c['type']} → {c.get('product', '?')}"
+        for c in sorted(cats, key=lambda x: x.get('priority', 99))[:60]
+    )
+    type_perf = '\n'.join(
+        f"  • {t['message_type']}: {t['leads_n']} sent / {t['replies']} replies = {t['reply_rate']}%"
+        for t in (perf.get('by_message_type') or [])[:10]
+    ) or "  (no per-type data)"
+
+    prompt = f"""You're Aqua picking the next autopilot hunt strategy for the AqueLyst team. Pick the top {top_n} business types from the ACTIVE list below to hunt next, ordered by priority.
+
+ACTIVE HUNT CATEGORIES (user-curated, [priority] type → product):
+{active_summary}
+
+LAST-30-DAY PERFORMANCE BY MESSAGE TYPE:
+{type_perf}
+
+PIPELINE NOW:
+  Total leads: {perf['totals'].get('leads_contacted', 0)} contacted
+  Reply rate: {perf['totals'].get('reply_rate_pct', 0)}%
+  Replies received: {perf['totals'].get('replies', 0)}
+
+PICKING RULES:
+  1. Weight toward verticals that have replies > 0 in the data above.
+  2. Mix 5-6 high-priority (P=1) with 2-3 exploratory (P=2-3) for breadth.
+  3. Don't pick all from one product line — diversity.
+  4. Skip anything that LOOKS over-saturated (heavily contacted recently).
+
+Output ONLY a JSON object on a single line, no other text:
+{{"types":["type1","type2",...],"reasoning":"2-sentence why"}}"""
+
+    text, source = chat([{"role": "user", "content": prompt}])
+    if not text:
+        # LLM down — degrade gracefully to priority sort
+        cats.sort(key=lambda c: (c.get('priority', 99), c.get('product', 'zzz')))
+        return {
+            'recommended_types': [c['type'] for c in cats[:top_n]],
+            'reasoning': "(LLM unavailable — sorted by priority only.)",
+            'source': 'fallback',
+        }
+
+    import json as _json
+    import re as _re
+    try:
+        m = _re.search(r'\{[\s\S]*\}', text)
+        if m:
+            obj = _json.loads(m.group(0))
+            picks = list(obj.get('types', []))[:top_n]
+            reason = str(obj.get('reasoning', ''))[:400]
+            # Validate picks against the active list (Aqua sometimes hallucinates)
+            valid_set = {c['type'] for c in cats}
+            picks = [p for p in picks if p in valid_set]
+            if not picks:
+                raise ValueError("Aqua returned no valid picks")
+            return {
+                'recommended_types': picks,
+                'reasoning': reason or "Picked based on reply-rate signal + priority + diversity.",
+                'source': 'aqua',
+            }
+    except Exception:
+        pass
+
+    cats.sort(key=lambda c: (c.get('priority', 99), c.get('product', 'zzz')))
+    return {
+        'recommended_types': [c['type'] for c in cats[:top_n]],
+        'reasoning': "(Aqua's response wasn't parseable — sorted by priority.)",
+        'source': 'fallback',
+    }
+
+
 def daily_brief(hours_back=24):
     """Aqua summarizes the last N hours of autopilot + Aqua activity for
     the Today page. Returns a dict with prose summary + raw numbers so

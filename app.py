@@ -4632,11 +4632,56 @@ def _render_autopilot_idle(state):
         business_types_all = [t['type'] for t in lead_discovery.get_discovery_targets()]
         default_types = business_types_all[:4]
 
+    # Aqua hunt-strategy picker — overrides the default selection with
+    # her data-driven recommendation when clicked.
+    if 'aqua_hunt_picks' not in st.session_state:
+        st.session_state['aqua_hunt_picks'] = None
+    aqua_picks = st.session_state.get('aqua_hunt_picks') or {}
+
+    pick_col1, pick_col2 = st.columns([3, 2])
+    if pick_col1.button("🤖 Let Aqua pick the best targets",
+                          help="Aqua reads your performance data + pipeline + active "
+                               "categories and recommends an optimal mix",
+                          use_container_width=True):
+        with st.spinner("Aqua reviewing performance data..."):
+            try:
+                rec = nepq_engine.recommend_hunt_strategy(top_n=8)
+                st.session_state['aqua_hunt_picks'] = rec
+                st.rerun()
+            except Exception as e:
+                st.error(f"Aqua hit an error: {str(e)[:120]}")
+    if aqua_picks.get('recommended_types'):
+        if pick_col2.button("🗑 Clear Aqua's picks",
+                              use_container_width=True):
+            st.session_state['aqua_hunt_picks'] = None
+            st.rerun()
+
+    if aqua_picks.get('recommended_types'):
+        # Show Aqua's reasoning + use her picks as the multiselect default
+        st.html(
+            f"<div style='background:linear-gradient(135deg,"
+            f"rgba(6,182,212,0.10),rgba(163,230,53,0.06));"
+            f"border:1px solid rgba(6,182,212,0.30);border-radius:10px;"
+            f"padding:0.7rem 1rem;margin:0.4rem 0 0.6rem'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+            f"color:#a3e635;letter-spacing:0.16em;text-transform:uppercase;"
+            f"font-weight:700;margin-bottom:0.35rem'>"
+            f"◢ AQUA'S PICK · {aqua_picks.get('source', 'aqua').upper()}</div>"
+            f"<div style='color:#cbd5e1;font-size:0.86rem;line-height:1.5'>"
+            f"{aqua_picks.get('reasoning', '')}</div></div>"
+        )
+        active_default = aqua_picks['recommended_types']
+    else:
+        active_default = default_types
+
+    # Filter default down to types that exist in business_types_all
+    valid_default = [t for t in active_default if t in business_types_all]
+
     selected_types = st.multiselect(
         "Business types to hunt for",
         business_types_all,
-        default=default_types,
-        help="Edit/add categories below. Defaults are pre-checked based on which are 'active' in your category list.",
+        default=valid_default,
+        help="Edit/add categories below. Defaults are pre-checked based on which are 'active' in your category list — or Aqua's data-driven picks if you used the button above.",
     )
 
     # Inline category editor
