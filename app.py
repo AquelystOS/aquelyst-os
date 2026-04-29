@@ -260,6 +260,55 @@ def _check_password():
     return False
 
 
+def _handle_open_tracking_if_requested():
+    """If the URL has ?action=open&d=DRAFTID&t=TOKEN, log the open and
+    short-circuit the page render (email clients fetch this URL trying
+    to render an image — they'll get HTML back but the GET request
+    itself is the signal). Runs BEFORE the team-password gate."""
+    qp = st.query_params
+    if qp.get('action') != 'open':
+        return
+    draft_id_str = qp.get('d', '')
+    token = qp.get('t', '')
+    try:
+        draft_id = int(draft_id_str)
+    except Exception:
+        st.stop()
+        return
+
+    import smtp_sender as _sm
+    expected = _sm._open_tracking_token(draft_id)
+    if token != expected:
+        st.stop()
+        return
+
+    lead_id = None
+    try:
+        conn = database.get_connection()
+        c = conn.cursor()
+        c.execute('SELECT lead_id FROM outreach_drafts WHERE id = ?', (draft_id,))
+        row = c.fetchone()
+        if row:
+            lead_id = row['lead_id']
+        conn.close()
+    except Exception:
+        pass
+    try:
+        database.record_email_event('open', draft_id=draft_id, lead_id=lead_id)
+    except Exception:
+        pass
+    # Don't log to activity feed for opens — they fire too often (Apple
+    # MPP, Gmail proxy, every render) and would drown the feed. The
+    # email_tracking_events table holds the raw data; the inbox UI
+    # surfaces aggregated open counts per draft.
+
+    # Empty response so the email client gets SOMETHING back. 1×1
+    # transparent GIF as a base64 data — email client won't render it
+    # (we already responded with HTML) but at least the GET completes.
+    st.html("<!-- open tracked -->")
+    st.stop()
+
+
 def _handle_click_tracking_if_requested():
     """If the URL has ?action=click&d=DRAFTID&u=URL&t=TOKEN, log the click
     and redirect to the actual URL. Handled BEFORE the team-password gate
@@ -419,6 +468,7 @@ def _handle_unsubscribe_or_redirect_if_requested():
     st.stop()
 
 
+_handle_open_tracking_if_requested()
 _handle_click_tracking_if_requested()
 _handle_unsubscribe_or_redirect_if_requested()
 if not _check_password():

@@ -232,6 +232,39 @@ def _unsubscribe_token(email):
                     hashlib.sha256).hexdigest()[:16]
 
 
+def _open_tracking_token(draft_id):
+    """HMAC token that locks an open-tracking pixel to one draft."""
+    import hmac, hashlib
+    secret = ''
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets'):
+            secret = _st.secrets.get('UNSUBSCRIBE_SECRET', '') or ''
+    except Exception:
+        pass
+    if not secret:
+        secret = 'aquelyst-tracking-fallback-2026'
+    return hmac.new(secret.encode(), f"open|{draft_id}".encode(),
+                    hashlib.sha256).hexdigest()[:12]
+
+
+def _build_open_tracking_pixel(draft_id):
+    """Return an <img> tag pointing at the open-tracking endpoint. The email
+    client renders the message → fetches the image → our Streamlit app
+    logs the open. Gmail proxies through Google's image proxy (still
+    counts), Apple Mail MPP auto-fetches (false positives — known
+    limitation of all pixel-based tracking, no fix). 1×1 transparent."""
+    if not draft_id:
+        return ''
+    base = _public_app_url()
+    token = _open_tracking_token(draft_id)
+    url = f"{base}/?action=open&d={draft_id}&t={token}"
+    return (
+        f'<img src="{url}" width="1" height="1" '
+        f'style="display:none;border:0" alt="" />'
+    )
+
+
 def _click_tracking_token(draft_id, url):
     """HMAC-signed token so click URLs can't be tampered with."""
     import hmac, hashlib
@@ -382,6 +415,9 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
             html_body += html_footer
             if tracking_pixel_url:
                 html_body += f'<br><img src="{tracking_pixel_url}" width="1" height="1" style="display:none">'
+            # Auto-append open-tracking pixel for any send with a draft_id
+            if draft_id:
+                html_body += _build_open_tracking_pixel(draft_id)
 
             html_part = MIMEText(html_body, 'html')
             msg.attach(html_part)
@@ -392,6 +428,8 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
             if draft_id:
                 html_body = _rewrite_links_in_html(html_body, draft_id)
             html_body += html_footer
+            if draft_id:
+                html_body += _build_open_tracking_pixel(draft_id)
             html_part = MIMEText(html_body, 'html')
             msg.attach(html_part)
 
