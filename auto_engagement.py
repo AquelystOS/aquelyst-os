@@ -224,6 +224,42 @@ def engage_lead_initial(lead, auto_send=False):
                             'reason': reason})
         return draft_id
 
+    # Aqua quality gate — review the draft before it goes out.
+    # score 7+ → send, 5-6 → queue for human, <5 → kill (no send).
+    if auto_send:
+        try:
+            review = nepq_engine.quality_review_draft(
+                result['subject'], result['body'], dict(lead))
+        except Exception:
+            review = {'score': 7, 'verdict': 'send', 'issues': [],
+                      'reason': 'review error, defaulting to send'}
+        if review['verdict'] == 'kill':
+            database.update_lead(lead['id'], status='drafted',
+                                  notes=(lead.get('notes') or '') +
+                                  f"\n\n🛑 Aqua blocked auto-send (score "
+                                  f"{review['score']}/10): {review['reason']}")
+            database.log_activity(lead['id'], 'auto_engagement_blocked',
+                                   f"🛑 Aqua blocked: {review['reason']}")
+            increment_stat('initial_emails_drafted')
+            log_event('blocked',
+                       f"🛑 Quality-gated ({review['score']}/10) — {lead['business_name']}: {review['reason']}",
+                       details={'lead_id': lead['id'], 'draft_id': draft_id,
+                                'score': review['score'],
+                                'issues': review['issues']})
+            return draft_id
+        if review['verdict'] == 'queue':
+            database.update_lead(lead['id'], status='drafted')
+            database.log_activity(lead['id'], 'auto_engagement_drafted',
+                                   f"⚠️ Queued for review (Aqua score "
+                                   f"{review['score']}/10): {review['reason']}")
+            increment_stat('initial_emails_drafted')
+            log_event('queued',
+                       f"⚠️ Queued for human review ({review['score']}/10) — {lead['business_name']}: {review['reason']}",
+                       details={'lead_id': lead['id'], 'draft_id': draft_id,
+                                'score': review['score']})
+            return draft_id
+        # else: verdict == 'send' — fall through to actual send
+
     if auto_send:
         # Approve + send
         database.approve_draft(draft_id)
@@ -304,6 +340,33 @@ def engage_lead_followup(lead, auto_send=False):
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
                             'reason': reason})
         return draft_id
+
+    # Aqua quality gate on followups too
+    if auto_send:
+        try:
+            review = nepq_engine.quality_review_draft(
+                result['subject'], result['body'], dict(lead))
+        except Exception:
+            review = {'score': 7, 'verdict': 'send', 'issues': [],
+                      'reason': 'review error, defaulting to send'}
+        if review['verdict'] == 'kill':
+            database.log_activity(lead['id'], 'auto_followup_blocked',
+                                   f"🛑 Aqua blocked followup #{touch_number}: {review['reason']}")
+            increment_stat('followups_drafted')
+            log_event('blocked',
+                       f"🛑 Followup #{touch_number} quality-gated ({review['score']}/10) — {lead['business_name']}: {review['reason']}",
+                       details={'lead_id': lead['id'], 'draft_id': draft_id,
+                                'score': review['score']})
+            return draft_id
+        if review['verdict'] == 'queue':
+            database.log_activity(lead['id'], 'auto_followup_drafted',
+                                   f"⚠️ Followup #{touch_number} queued (Aqua score {review['score']}/10)")
+            increment_stat('followups_drafted')
+            log_event('queued',
+                       f"⚠️ Followup #{touch_number} queued for review ({review['score']}/10) — {lead['business_name']}",
+                       details={'lead_id': lead['id'], 'draft_id': draft_id,
+                                'score': review['score']})
+            return draft_id
 
     if auto_send:
         database.approve_draft(draft_id)

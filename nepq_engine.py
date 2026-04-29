@@ -546,6 +546,85 @@ def _claude_chat(messages, max_tokens=1024, system_prompt=None):
         return None, f"Claude error: {str(e)[:100]}"
 
 
+def quality_review_draft(subject, body, lead_data):
+    """Aqua reviews an autopilot-generated draft before it auto-sends.
+
+    Scores 0-10 against an objective rubric and returns:
+      {'score': int, 'verdict': 'send' | 'queue' | 'kill',
+       'issues': [list of specific concerns], 'reason': str}
+
+    Verdict thresholds:
+      • score >= 7 → 'send'  (auto-send proceeds)
+      • score 5-6  → 'queue' (saved as draft for human approval)
+      • score < 5  → 'kill'  (draft marked low-quality, won't auto-send)
+
+    The rubric checks: bracketed placeholders ([Name], [Company]),
+    generic openers ("I hope this finds you well"), specificity to
+    the prospect, NEPQ structure (one focused question), proper
+    sign-off (the logged-in user's first name, not "Joseph" by
+    default), and clean formatting.
+
+    Falls back to a permissive 'send' verdict if the LLM is
+    unavailable — better to send a maybe-OK draft than to block all
+    autopilot sends because the LLM router is down.
+    """
+    business = lead_data.get('business_name', '?')
+    body_excerpt = (body or '')[:1500]
+
+    prompt = f"""You are reviewing an outbound cold email DRAFT before it auto-sends. Be brutally honest. Score the draft 0-10 against this rubric, then give a one-sentence reason.
+
+PROSPECT: {business}
+
+SUBJECT: {subject}
+
+BODY:
+{body_excerpt}
+
+RUBRIC (each item is a fail-fast check):
+1. Are there ANY bracketed placeholders ([Name], [Company], [First Name], [Their Business], etc.)? If yes → score ≤ 3.
+2. Is the opener specific to THIS prospect, or a generic "I hope this finds you well" / "I came across your business" filler? Generic → cap at 5.
+3. Is there exactly ONE focused question (NEPQ style)? Multi-question or no-question → cap at 6.
+4. Is the sign-off a real first name from the AqueLyst team, or did the AI hallucinate a wrong name? Wrong/missing → cap at 4.
+5. Length appropriate (4-6 sentences for initial cold)? Wall-of-text or one-liner → cap at 6.
+6. Tone calibrated (curious peer, not bro-energy or corporate)? Off-tone → cap at 6.
+7. Any factual hallucinations about the prospect? Hallucination → cap at 3.
+
+Output ONLY a JSON object on a single line, no other text:
+{{"score": N, "issues": ["specific issue 1", "specific issue 2"], "reason": "one-sentence summary"}}
+"""
+    text, source = chat([{"role": "user", "content": prompt}])
+    if not text:
+        # LLM unavailable — be permissive
+        return {'score': 7, 'verdict': 'send',
+                'issues': [], 'reason': 'LLM review unavailable, defaulting to send'}
+
+    # Parse JSON object from the LLM response
+    import json as _json
+    import re as _re
+    score = 7  # permissive default
+    issues = []
+    reason = ''
+    try:
+        m = _re.search(r'\{[^{}]*\}', text, _re.DOTALL)
+        if m:
+            obj = _json.loads(m.group(0))
+            score = int(obj.get('score', 7))
+            issues = list(obj.get('issues', []))[:5]
+            reason = str(obj.get('reason', ''))[:200]
+    except Exception:
+        pass
+
+    score = max(0, min(10, score))
+    if score >= 7:
+        verdict = 'send'
+    elif score >= 5:
+        verdict = 'queue'
+    else:
+        verdict = 'kill'
+    return {'score': score, 'verdict': verdict,
+            'issues': issues, 'reason': reason or f'rubric score {score}/10'}
+
+
 def chat(messages, prefer='auto', extra_context=''):
     """
     Main chat entry point. Routes to Claude → Cerebras → templates.
