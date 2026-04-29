@@ -831,6 +831,18 @@ def generate_initial_outreach(lead_data):
     sender_first = current_user['name'].split()[0] if current_user.get('name') else 'there'
     me_email = (current_user.get('email') or '').lower()
 
+    # Web-research the prospect before drafting (Tavily). Returns None if no
+    # API key is configured or the call fails — falls through to existing
+    # logic so no regression when Tavily isn't connected.
+    research_block = ""
+    try:
+        import lead_research as _lr
+        research = _lr.research_prospect(lead_data)
+        if research:
+            research_block = _lr.format_research_for_prompt(research)
+    except Exception:
+        pass
+
     name_line = (
         f"- Contact (first name): {first_name}"
         if has_name else
@@ -863,7 +875,7 @@ PROSPECT:
 - Location: {location or 'unknown'}
 - Known pain/problem: {pain or 'unknown — you may need to use a generic curiosity opener'}
 - Personalized hook from research: {hook or 'none'}
-{peer_warning}
+{research_block}{peer_warning}
 YOU ARE: {current_user['name']} ({current_user['role']}) — sign off as "{sender_first}"
 
 EMAIL REQUIREMENTS:
