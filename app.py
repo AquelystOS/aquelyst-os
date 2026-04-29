@@ -4028,11 +4028,15 @@ def _render_autopilot_drill(drill):
             )
 
     if filtered:
-        st.markdown("**Activity log entries:**")
-        for entry in filtered[:50]:
-            t = entry.get('time', '')[11:19]
-            msg = entry.get('message', '')
-            st.markdown(f"`{t}` — {msg}")
+        st.markdown(f"**Activity log entries** ({len(filtered)} total — scroll for more)")
+        # Fixed-height scrollable box ≈ 5 visible entries. height=240 fits
+        # 5 monospace lines comfortably + a little padding. Streamlit's
+        # native st.container(height=N) auto-scrolls overflow.
+        with st.container(height=240, border=True):
+            for entry in filtered[:200]:  # cap at 200 so the box doesn't grow forever
+                t = ui_kit.format_iso_et(entry.get('time', ''))
+                msg = entry.get('message', '')
+                st.markdown(f"`{t}` — {msg}")
     else:
         st.caption("_No entries yet._")
 
@@ -4147,11 +4151,14 @@ def _render_autopilot_drill(drill):
 
     log = autopilot.read_log()
     if log:
-        with st.container():
-            for entry in log[:25]:
+        st.caption(f"{len(log)} entries · scroll the box below for older")
+        # Top-5 visible by default; scroll for older. Timestamps are
+        # converted from server-local UTC to ET for display.
+        with st.container(height=320, border=True):
+            for entry in log[:200]:  # cap to keep DOM size sane
                 event_type = entry.get('type', 'system')
                 msg = entry.get('message', '')
-                time_str = entry.get('time', '')[11:19]  # just HH:MM:SS
+                time_str = ui_kit.format_iso_et(entry.get('time', ''))
 
                 color = {
                     'added': '#28a745',

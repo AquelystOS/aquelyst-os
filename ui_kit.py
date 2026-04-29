@@ -28,6 +28,28 @@ def now_et():
     return datetime.now()
 
 
+def format_iso_et(iso_str, fmt='%H:%M:%S ET'):
+    """Convert any stored ISO timestamp string to Eastern Time and format.
+
+    Handles naive timestamps by assuming UTC (Streamlit Cloud servers run
+    in UTC, so naive datetime.now().isoformat() values stored in log files
+    are UTC). Returns the original string slice if parsing fails."""
+    if not iso_str:
+        return ''
+    try:
+        try:
+            from zoneinfo import ZoneInfo
+        except Exception:
+            return str(iso_str)[11:19]
+        s = str(iso_str).strip().replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo('UTC'))
+        return dt.astimezone(ZoneInfo('America/New_York')).strftime(fmt)
+    except Exception:
+        return str(iso_str)[11:19]
+
+
 _LOGO_PATH = Path(__file__).parent / "assets" / "aquelyst-logo.png"
 
 
