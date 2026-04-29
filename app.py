@@ -1958,6 +1958,19 @@ def _admin_keys_section():
             'signup_url': 'https://sam.gov/content/api',
             'key_prefix': '',
         },
+        {
+            'id': 'tavily',
+            'name': 'Tavily Web Search',
+            'tier': 'FREEMIUM',
+            'tier_color': '#06b6d4',
+            'note': "Powers Aqua's research-before-drafting. Before each cold "
+                    "email, she web-searches the prospect for real specifics "
+                    "(recent news, key facts) to open with — instead of "
+                    "generic curiosity. Free tier = 1,000 searches/month.",
+            'keys_url': 'https://app.tavily.com',
+            'signup_url': 'https://tavily.com',
+            'key_prefix': 'tvly-',
+        },
     ]
     for prov in DISCOVERY_PROVIDERS:
         pid = prov['id']
