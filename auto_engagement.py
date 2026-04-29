@@ -145,7 +145,17 @@ def find_engagement_candidates(min_score, cooldown_minutes=10):
 
 
 def find_followup_candidates():
-    """Find leads with follow-ups due that haven't replied."""
+    """Find leads with follow-ups due that haven't replied.
+
+    Smart cadence: skip leads that show ANY signal of engagement so we
+    don't pile cold touches on top of a warm conversation.
+      • opt_out / suppression list                  → skip
+      • status not in (contacted, follow_up_due,
+        drafted)                                    → skip (closed/won/lost)
+      • has any inbound_message linked to them      → skip (they replied)
+      • has an unreviewed draft from < 24hr ago     → skip (don't pile up)
+    """
+    from datetime import datetime as _dt, timedelta as _td
     leads = database.get_follow_ups_due()
     candidates = []
     for l in leads:
@@ -155,9 +165,26 @@ def find_followup_candidates():
             continue
         if database.is_suppressed(l['email']):
             continue
-        # Only if status indicates we've been talking but haven't closed
-        if l['status'] in ('contacted', 'follow_up_due', 'drafted'):
-            candidates.append(l)
+        if l['status'] not in ('contacted', 'follow_up_due', 'drafted'):
+            continue
+        # Did the prospect ever reply? If yes, never auto-send a cold
+        # follow-up on top — that's a critical respect-the-thread rule.
+        try:
+            if database.has_inbound_messages(l['id']):
+                continue
+        except Exception:
+            pass
+        # Already have an unreviewed draft from the last 24 hr? Don't
+        # pile a 2nd one on the human review queue.
+        try:
+            recent_drafts = database.get_drafts_for_lead(l['id'])
+            cutoff_iso = (_dt.utcnow() - _td(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
+            if any((not d.get('sent')) and (d.get('created_at') or '') >= cutoff_iso
+                   for d in recent_drafts):
+                continue
+        except Exception:
+            pass
+        candidates.append(l)
     return candidates
 
 
@@ -297,15 +324,38 @@ def engage_lead_initial(lead, auto_send=False):
 
 
 def engage_lead_followup(lead, auto_send=False):
-    """Generate and (optionally) send a follow-up email."""
+    """Generate and (optionally) send a follow-up email.
+
+    Smart cadence: defensive double-check on top of find_followup_candidates'
+    filters. If the prospect replied between the candidate-find call and
+    this call, abort cleanly — race conditions matter when multiple users
+    + auto_engagement run in parallel."""
+    # Defensive: did they reply between candidate selection and now?
+    try:
+        if database.has_inbound_messages(lead['id']):
+            log_event('skipped',
+                       f"Reply detected mid-cycle, skipping followup — {lead['business_name']}")
+            return None
+    except Exception:
+        pass
+
     # Determine touch number based on prior drafts
     drafts = database.get_drafts_for_lead(lead['id'])
     sent_count = sum(1 for d in drafts if d['sent'])
     touch_number = sent_count + 1  # next email is touch N+1
 
     if touch_number > 6:
-        # Too many touches — stop
+        # Too many touches — stop. Mark the lead so we don't keep
+        # picking it back up every cycle.
         log_event('skipped', f"Max touches reached for {lead['business_name']}")
+        try:
+            database.update_lead(lead['id'], status='closed_lost',
+                                  notes=(lead.get('notes') or '') +
+                                  f"\n\n📭 Auto-closed after 6 silent touches "
+                                  f"(no reply). Move back to 'contacted' if you "
+                                  f"want to resume outreach.")
+        except Exception:
+            pass
         return None
 
     # Build conversation history for context

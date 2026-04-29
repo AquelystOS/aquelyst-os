@@ -1592,6 +1592,21 @@ def get_follow_ups_due():
     conn.close()
     return leads
 
+def has_inbound_messages(lead_id):
+    """True if this lead has ever replied (any inbound_message linked).
+    Used by smart-cadence to skip auto-follow-up on already-engaged
+    leads — never want to pile a cold touch on top of a warm thread."""
+    if not lead_id:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM inbound_messages WHERE lead_id = ? LIMIT 1',
+              (lead_id,))
+    found = c.fetchone() is not None
+    conn.close()
+    return found
+
+
 def get_recent_sends_by_sender(sender_email, limit=3):
     """Last N sent drafts by a specific user — used as few-shot voice
     examples in Aqua's prompt so she mimics each user's actual style.
