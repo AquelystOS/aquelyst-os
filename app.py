@@ -260,6 +260,86 @@ def _check_password():
     return False
 
 
+def _handle_unsubscribe_or_redirect_if_requested():
+    """If the URL contains ?action=unsubscribe&e=...&t=..., handle it BEFORE
+    the team-password gate so prospects can unsubscribe without knowing the
+    team password. The HMAC token validates the email so people can't
+    unsubscribe others. Required for CAN-SPAM compliance + good practice."""
+    qp = st.query_params
+    action = qp.get('action', '')
+    if action != 'unsubscribe':
+        return  # nothing to do; main flow continues
+
+    import base64 as _b64
+    import urllib.parse as _up
+    encoded_email = qp.get('e', '')
+    token = qp.get('t', '')
+
+    # Decode the email (URL-encoded, possibly base64 if any)
+    try:
+        email = _up.unquote(encoded_email).lower().strip()
+        # Allow either base64 or plain URL-encoded
+        if '@' not in email:
+            try:
+                email = _b64.urlsafe_b64decode(encoded_email + '==').decode().lower().strip()
+            except Exception:
+                pass
+    except Exception:
+        email = ''
+
+    # Validate HMAC token
+    import smtp_sender as _sm
+    expected = _sm._unsubscribe_token(email) if email else ''
+    if not email or not expected or token != expected:
+        st.html(
+            "<div style='max-width:520px;margin:5rem auto;text-align:center;"
+            "background:#fff;border:1px solid #e5e7eb;border-radius:14px;"
+            "padding:2.2rem 1.8rem'>"
+            "<div style='font-size:2.4rem'>⚠️</div>"
+            "<h1 style='color:#0a0f1c !important;margin:0.5rem 0;font-size:1.5rem'>"
+            "Invalid unsubscribe link</h1>"
+            "<div style='color:#475569;font-size:0.95rem'>"
+            "This link is malformed or expired. If you'd like to stop "
+            "receiving emails from AqueLyst, simply reply STOP to any "
+            "message you've received from us and we'll remove you "
+            "manually within 24 hours.</div></div>"
+        )
+        st.stop()
+
+    # Add to suppression + audit log
+    try:
+        database.add_to_suppression(email, reason='unsubscribe_link')
+    except Exception:
+        pass
+    try:
+        import audit_log as _al
+        _al.log('unsubscribe',
+                 f"Self-service unsubscribe: {email}",
+                 target_type='lead',
+                 target_label=email)
+    except Exception:
+        pass
+
+    st.html(
+        "<div style='max-width:520px;margin:5rem auto;text-align:center;"
+        "background:#fff;border:1px solid #d1fae5;border-radius:14px;"
+        "padding:2.2rem 1.8rem;box-shadow:0 4px 24px rgba(16,185,129,0.10)'>"
+        "<div style='font-size:2.4rem'>✅</div>"
+        "<h1 style='color:#0a0f1c !important;margin:0.5rem 0;font-size:1.5rem'>"
+        "You're unsubscribed</h1>"
+        f"<div style='color:#475569;font-size:0.95rem;margin-top:0.5rem'>"
+        f"<code style='background:#f3f4f6;padding:0.15rem 0.4rem;"
+        f"border-radius:4px'>{email}</code> has been removed from "
+        "AqueLyst's outreach list. You won't receive further emails "
+        "from us.</div>"
+        "<div style='color:#94a3b8;font-size:0.85rem;margin-top:1rem'>"
+        "If you got this in error, reply to one of our previous emails "
+        "and we'll add you back manually.</div></div>"
+    )
+    st.stop()
+
+
+_handle_unsubscribe_or_redirect_if_requested()
 if not _check_password():
     st.stop()
 

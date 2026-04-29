@@ -189,6 +189,78 @@ def test_smtp_connection(provider, email, app_password):
         return False, f"Connection error: {str(e)}"
 
 
+def _public_app_url():
+    """Return the production app URL (used in unsubscribe links)."""
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets'):
+            url = _st.secrets.get('APP_URL', '') or ''
+            if url:
+                return url.rstrip('/')
+    except Exception:
+        pass
+    return 'https://aquelyst-os.streamlit.app'
+
+
+def _company_address():
+    """Return AqueLyst's physical mailing address for CAN-SPAM compliance.
+    Set COMPANY_ADDRESS in Streamlit Secrets to override the default."""
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets'):
+            addr = _st.secrets.get('COMPANY_ADDRESS', '') or ''
+            if addr:
+                return addr
+    except Exception:
+        pass
+    return 'AqueLyst LLC · Pennsylvania, USA'
+
+
+def _unsubscribe_token(email):
+    """HMAC-signed token so prospects can only unsubscribe themselves."""
+    import hmac, hashlib
+    secret = ''
+    try:
+        import streamlit as _st
+        if hasattr(_st, 'secrets'):
+            secret = _st.secrets.get('UNSUBSCRIBE_SECRET', '') or ''
+    except Exception:
+        pass
+    if not secret:
+        secret = 'aquelyst-unsubscribe-fallback-2026'  # OK to leak — used only for unsubscribe
+    return hmac.new(secret.encode(), email.lower().encode(),
+                    hashlib.sha256).hexdigest()[:16]
+
+
+def _build_can_spam_footer(to_email, plain=True):
+    """Append the legally-required CAN-SPAM footer to every cold/automated
+    email: physical address + one-click unsubscribe link.
+
+    plain: True → plain-text version (for the text/plain MIME part).
+            False → HTML version (for the text/html MIME part).
+    """
+    import urllib.parse
+    base = _public_app_url()
+    token = _unsubscribe_token(to_email)
+    qe = urllib.parse.quote(to_email, safe='')
+    unsubscribe_url = f"{base}/?action=unsubscribe&e={qe}&t={token}"
+    address = _company_address()
+    if plain:
+        return (
+            "\n\n—\n"
+            f"Sent by AqueLyst — {address}\n"
+            f"Don't want these emails? Unsubscribe: {unsubscribe_url}"
+        )
+    return (
+        "<br><br><hr style='border:none;border-top:1px solid #e5e7eb;margin:20px 0'>"
+        f"<div style='font-size:12px;color:#9ca3af;line-height:1.5'>"
+        f"Sent by AqueLyst — {address}<br>"
+        f"Don't want these emails? "
+        f"<a href='{unsubscribe_url}' style='color:#9ca3af'>Unsubscribe</a>"
+        f"</div>"
+    )
+
+
 def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_pixel_url=None):
     """
     Send email via configured SMTP for the CURRENTLY LOGGED-IN user.
@@ -197,6 +269,10 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_
     If the logged-in user has no SMTP configured, the send is BLOCKED with
     a clear message. We never silently borrow another user's SMTP — that
     was the bug that masqueraded Danielle's emails as Joseph's.
+
+    Every send also gets a CAN-SPAM compliant footer (physical address +
+    one-click unsubscribe link) appended automatically. Required by US
+    federal law for commercial email, and protects domain reputation.
     """
     user_email = _current_user_email()
     config = load_smtp_config()
@@ -214,6 +290,11 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_
     if not preset:
         return False, "Invalid SMTP provider"
 
+    # CAN-SPAM compliance: append physical address + unsubscribe link
+    plain_footer = _build_can_spam_footer(to_email, plain=True)
+    html_footer = _build_can_spam_footer(to_email, plain=False)
+    body_with_footer = body + plain_footer
+
     try:
         msg = MIMEMultipart('alternative')
 
@@ -223,18 +304,32 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None, tracking_
         msg['Subject'] = subject
         msg['Date'] = formatdate(localtime=True)
         msg['Message-ID'] = make_msgid()
+        # CAN-SPAM also calls out List-Unsubscribe header support — modern
+        # mail clients render a one-click button when this header is present.
+        import urllib.parse as _up
+        token = _unsubscribe_token(to_email)
+        unsub_url = f"{_public_app_url()}/?action=unsubscribe&e={_up.quote(to_email, safe='')}&t={token}"
+        msg['List-Unsubscribe'] = f"<{unsub_url}>"
+        msg['List-Unsubscribe-Post'] = "List-Unsubscribe=One-Click"
 
         if reply_to:
             msg['Reply-To'] = reply_to
 
-        plain_part = MIMEText(body, 'plain')
+        plain_part = MIMEText(body_with_footer, 'plain')
         msg.attach(plain_part)
 
         if body_html or tracking_pixel_url:
             html_body = body_html or body.replace('\n', '<br>')
+            html_body += html_footer
             if tracking_pixel_url:
                 html_body += f'<br><img src="{tracking_pixel_url}" width="1" height="1" style="display:none">'
 
+            html_part = MIMEText(html_body, 'html')
+            msg.attach(html_part)
+        else:
+            # Always include an HTML alternative so the unsubscribe link
+            # renders as a proper hyperlink (better deliverability + UX)
+            html_body = body.replace('\n', '<br>') + html_footer
             html_part = MIMEText(html_body, 'html')
             msg.attach(html_part)
 
