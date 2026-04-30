@@ -743,16 +743,21 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                details={'lead_id': lead['id'], 'draft_id': draft_id, 'source': reply['source']})
 
     if auto_send:
-        # Approve, then SCHEDULE the send 60-180s out instead of firing
-        # immediately. Joseph asked for a natural-feeling delay so
-        # auto-replies don't read as robotic-fast AI: "put a launch
-        # timer next to the draft that counts down and then auto sends
-        # the reply." The drain loop in auto_engagement picks up
-        # scheduled drafts whose time has come, with proper threading.
+        # Approve, then SCHEDULE the send with the configured natural-
+        # delay window instead of firing immediately. The drain loop
+        # in auto_engagement picks up scheduled drafts whose time has
+        # come, with proper threading.
         database.approve_draft(draft_id)
+        try:
+            import aqua as _aqua
+            _cfg = _aqua.load_config()
+            min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
+            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
+        except Exception:
+            min_d, max_d = 60, 180
         import random as _random
         from datetime import datetime as _dt, timedelta as _td
-        delay_sec = _random.randint(60, 180)
+        delay_sec = _random.randint(min_d, max_d)
         send_at = (_dt.utcnow() + _td(seconds=delay_sec)).isoformat()
         database.schedule_draft_send(draft_id, send_at)
         database.log_activity(lead['id'], 'auto_reply_scheduled',

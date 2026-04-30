@@ -2502,7 +2502,7 @@ def show_operations():
     options = [
         ('today', '🏠 Today'),
         ('autopilot', '🤖 Autopilot'),
-        ('sales_bot', '🎯 Sales Bot'),
+        ('sales_bot', '🤖 Aqua'),
         ('bids', '💰 Bids'),
     ]
     for i, (key, label) in enumerate(options):
@@ -3624,11 +3624,12 @@ def _aqua_daily_brief():
 
 @st.fragment(run_every=30)
 def _inbox_status_fragment():
-    """4 INTERACTIVE status cards — counts navigate, toggle cards toggle bots."""
-    # This fragment auto-refreshes every 30s. A transient DB blip (Supabase
-    # pooler rotation, connection death between health-check and use) used
-    # to crash the entire inbox page. Wrap the queries so the cards just
-    # show '—' on a blip, and the next tick recovers.
+    """3 cards: Sent / Drafts pending / Aqua status. Replaces the
+    previous 4-card row that exposed Watcher and Auto-Engagement
+    separately — now both are routed through the single Aqua mode
+    toggle on the Aqua page."""
+    # Defensive against transient DB blips so a Supabase pooler death
+    # doesn't take down the whole inbox.
     try:
         sent = database.get_sent_drafts(limit=500)
     except Exception:
@@ -3637,12 +3638,14 @@ def _inbox_status_fragment():
         pending = database.get_pending_drafts(limit=500)
     except Exception:
         pending = []
-    watcher_running = email_responder.is_running()
-    engagement_running = auto_engagement.is_running()
 
-    cols = st.columns(4)
+    import aqua as _aqua
+    summary = _aqua.get_status_summary()
+    mode = summary['mode']
 
-    # SENT BY BOT — clickable to navigate to Sent
+    cols = st.columns(3)
+
+    # SENT BY BOT
     with cols[0]:
         st.html(
             "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
@@ -3655,7 +3658,7 @@ def _inbox_status_fragment():
             st.session_state.compose_subtab = "sent"
             st.rerun()
 
-    # DRAFTS PENDING — clickable card jumps straight to drafts tab
+    # DRAFTS PENDING
     with cols[1]:
         st.html(
             "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
@@ -3670,133 +3673,60 @@ def _inbox_status_fragment():
             st.session_state.compose_subtab = "drafts"
             st.rerun()
 
-    # INBOX WATCHER — clickable TOGGLE
+    # AQUA — single tile shows mode, click to toggle directly here
     with cols[2]:
-        watcher_color = '#16a34a' if watcher_running else '#dc2626'
-        watcher_bg = '#dcfce7' if watcher_running else '#fef2f2'
-        watcher_label = '🟢 WATCHING' if watcher_running else '🔴 OFF'
-        watcher_icon = '👁️‍🗨️' if watcher_running else '👁'
-
-        # Surface last-checked + next-check so user can SEE the watcher polling
-        sub_line = ""
-        if watcher_running:
-            try:
-                wstate = email_responder.get_state() or {}
-                last_run = wstate.get('last_run')
-                next_check = wstate.get('next_check')
-                if last_run:
-                    sub_line = f"last {format_date_friendly(last_run)}"
-                if next_check:
-                    sub_line += f" · next {format_date_friendly(next_check)}"
-            except Exception:
-                pass
-
-        # Show actual watcher mode + interval so the user can SEE whether
-        # we're in DRAFT mode or AUTO-REPLY mode. Joseph kept hitting
-        # state where the watcher was running but in draft mode while
-        # he expected auto-reply — invisible mismatch.
-        watcher_state = email_responder.get_state() if watcher_running else {}
-        watcher_mode = watcher_state.get('auto_reply_mode', 'draft')
-        watcher_interval = watcher_state.get('check_interval_minutes', 1)
-        mode_badge = (
-            "<span style='background:#16a34a;color:white;padding:0.05rem 0.4rem;"
-            "border-radius:6px;font-size:0.6rem;font-weight:700'>AUTO-REPLY</span>"
-            if watcher_mode == 'send' and watcher_running else
-            "<span style='background:#f59e0b;color:white;padding:0.05rem 0.4rem;"
-            "border-radius:6px;font-size:0.6rem;font-weight:700'>DRAFT MODE</span>"
-            if watcher_running else ""
-        )
+        mode_color = {'off': '#94a3b8', 'drafting': '#06b6d4',
+                       'autonomous': '#a3e635'}.get(mode, '#94a3b8')
+        mode_bg = {'off': '#f1f5f9', 'drafting': '#cffafe',
+                    'autonomous': '#ecfccb'}.get(mode, '#f1f5f9')
+        mode_label = {'off': '⏸ OFF',
+                       'drafting': '✍️ DRAFTING',
+                       'autonomous': '🚀 AUTONOMOUS'}.get(mode, '⏸ OFF')
+        eng_state = summary['engagement_state']
+        watcher_state = summary['watcher_state']
+        sub_bits = []
+        if mode != 'off':
+            stats = eng_state.get('stats', {}) or {}
+            drafted = stats.get('initial_emails_drafted', 0)
+            sent_n = stats.get('initial_emails_sent', 0)
+            if drafted or sent_n:
+                sub_bits.append(f"{sent_n} sent / {drafted} drafted")
+            last_check = watcher_state.get('last_check')
+            if last_check:
+                sub_bits.append(f"last poll {last_check[11:19]}")
+        sub_line = ' · '.join(sub_bits) if sub_bits else 'Idle'
         st.html(
-            f"<div style='background:{watcher_bg};border:2px solid {watcher_color};border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
-            f"<div style='font-size:1.5rem'>{watcher_icon}</div>"
-            f"<div style='font-size:0.95rem;font-weight:800;color:{watcher_color};margin-top:0.2rem'>{watcher_label}</div>"
+            f"<div style='background:{mode_bg};border:2px solid {mode_color};"
+            f"border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
+            f"<div style='font-size:1.5rem'>🤖</div>"
+            f"<div style='font-size:0.95rem;font-weight:800;color:{mode_color};margin-top:0.2rem'>"
+            f"{mode_label}</div>"
             f"<div style='font-size:0.65rem;color:#64748b;font-weight:500;margin-top:0.2rem;height:0.85rem'>{sub_line}</div>"
             f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.2rem'>"
-            f"Inbox Watcher (every {watcher_interval}min) {mode_badge}</div></div>"
+            f"Aqua</div></div>"
         )
-        toggle_label = "Click to STOP" if watcher_running else "Click to START"
-        if st.button(toggle_label, key="inbox_card_watcher_toggle", use_container_width=True):
-            if watcher_running:
-                email_responder.stop_responder()
-            else:
-                # If auto-engagement is already in auto-send, start watcher
-                # in send mode too so the user doesn't end up with a
-                # draft-mode watcher next to an auto-send engagement.
-                ae_cfg = (auto_engagement.get_state() or {}).get('config', {})
-                ae_running = auto_engagement.is_running()
-                want_send = (ae_running and ae_cfg.get('auto_send', False))
-                start_mode = 'send' if want_send else 'draft'
-                email_responder.start_responder(
-                    check_interval_minutes=1, auto_reply_mode=start_mode)
+        # Three quick-pick mode buttons in a sub-row so the user can
+        # toggle without leaving the inbox.
+        bcols = st.columns(3)
+        for i, (key, lbl) in enumerate([('off', '⏸'),
+                                          ('drafting', '✍️'),
+                                          ('autonomous', '🚀')]):
+            with bcols[i]:
+                disabled = (mode == key)
+                if st.button(lbl, key=f"inbox_aqua_{key}",
+                              use_container_width=True,
+                              disabled=disabled,
+                              help={'off': 'Stop everything',
+                                    'drafting': 'Watch + draft, you approve',
+                                    'autonomous': 'Watch + draft + auto-send'}[key]):
+                    ok, m = _aqua.set_mode(key)
+                    if not ok:
+                        st.error(m)
+                    st.rerun()
+        if st.button("Tune settings →", key="inbox_aqua_settings",
+                      use_container_width=True):
+            st.session_state.page = "sales_bot"
             st.rerun()
-        # If watcher is running but in DRAFT mode, expose a one-click
-        # promote-to-auto-reply button so the user doesn't have to
-        # stop/restart the watcher just to flip the mode.
-        if watcher_running and watcher_mode != 'send':
-            if st.button("⚡ Switch to AUTO-REPLY",
-                          key="inbox_card_watcher_to_send",
-                          use_container_width=True,
-                          help="Watcher will start auto-sending replies "
-                                "instead of just drafting them. Existing "
-                                "pending replies get scheduled to fire over "
-                                "the next few minutes."):
-                email_responder.set_auto_reply_mode('send')
-                st.rerun()
-        elif watcher_running and watcher_mode == 'send':
-            if st.button("✏️ Switch to DRAFT only",
-                          key="inbox_card_watcher_to_draft",
-                          use_container_width=True,
-                          help="Watcher will draft replies for your approval "
-                                "instead of auto-sending."):
-                email_responder.set_auto_reply_mode('draft')
-                st.rerun()
-
-    # AUTO-ENGAGEMENT — clickable TOGGLE
-    with cols[3]:
-        # Read user's preferred mode (auto-send vs draft) from session
-        eng_auto_send = st.session_state.get('engagement_auto_send', True)
-        cfg = (auto_engagement.get_state() or {}).get('config', {})
-        running_auto_send = cfg.get('auto_send', False) if engagement_running else None
-
-        eng_color = '#16a34a' if engagement_running else '#dc2626'
-        eng_bg = '#dcfce7' if engagement_running else '#fef2f2'
-        if engagement_running:
-            mode_text = '🚀 AUTO-SEND' if running_auto_send else '✍️ DRAFTING'
-        else:
-            mode_text = '🔴 OFF'
-        st.html(
-            f"<div style='background:{eng_bg};border:2px solid {eng_color};border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
-            f"<div style='font-size:1.5rem'>🚀</div>"
-            f"<div style='font-size:0.85rem;font-weight:800;color:{eng_color};margin-top:0.2rem'>{mode_text}</div>"
-            f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.2rem'>"
-            f"Auto-Engagement</div></div>"
-        )
-        if not engagement_running:
-            # Mode picker shown BEFORE start so user picks intent explicitly
-            new_auto_send = st.checkbox(
-                "Auto-send (no approval)",
-                value=eng_auto_send,
-                key="engagement_auto_send_inline",
-                help="If checked, Aqua actually sends emails. If unchecked, "
-                     "she only drafts and waits for your approval.",
-            )
-            st.session_state['engagement_auto_send'] = new_auto_send
-            if st.button("▶️ START", key="inbox_card_engagement_toggle",
-                          use_container_width=True, type="primary"):
-                auto_engagement.start_engagement(
-                    min_score=70,
-                    auto_send=new_auto_send,
-                    check_interval_minutes=15,
-                    max_per_run=5,
-                    follow_up_enabled=True,
-                )
-                st.rerun()
-        else:
-            if st.button("⏸ STOP", key="inbox_card_engagement_toggle",
-                          use_container_width=True):
-                auto_engagement.stop_engagement()
-                auto_engagement.update_state(running=False, config={})
-                st.rerun()
 
 
 def _glass_chart(title, body_html, stat_html='', accent='#06b6d4'):
@@ -5106,79 +5036,249 @@ def _render_autopilot_idle(state):
 
 
 def show_sales_bot():
-    """Sales Bot page — control center for autonomous engagement + training chat."""
+    """Aqua page — ONE three-state mode toggle on top, all the
+    individual subsystem configurations exposed below as tunable
+    sections. Replaces the previous Sales-Bot-with-six-tabs layout
+    that confused Joseph in 2026-04-30 testing.
+    """
+    import aqua as _aqua
 
     ui_kit.page_hero(
         title="<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                "-webkit-background-clip:text;-webkit-text-fill-color:transparent;"
-               "background-clip:text'>Autonomous</span> NEPQ sales agent",
-        subtitle="When a lead crosses your hot threshold, Aqua writes a Jeremy Miner-style "
-                  "NEPQ cold email and (optionally) sends it. When prospects reply, she "
-                  "auto-classifies intent and drafts the perfect next move. Train her in "
-                  "the chat below.",
-        eyebrow="🎯 SALES BOT",
-        chips=[
-            ("NEPQ methodology", "#06b6d4"),
-            ("Inbox monitoring", "#f59e0b"),
-            ("Auto-engagement", "#ec4899"),
-        ],
+               "background-clip:text'>Aqua</span> — your AI sales agent",
+        subtitle="Pick what Aqua should be doing right now. Everything else is a tunable knob below.",
+        eyebrow="🤖 AQUA",
     )
-
-    # legacy chip block kept (now hidden) — preserves any downstream layout
-    st.markdown("""
-    <div style='display:none'>
-        <div style='display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap'>
-            <span style='background:#f0f9ff;color:#0369a1;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                NEPQ methodology
-            </span>
-            <span style='background:#fef3c7;color:#92400e;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                Inbox monitoring
-            </span>
-            <span style='background:#fce7f3;color:#9d174d;padding:0.3rem 0.7rem;
-                         border-radius:14px;font-size:0.8rem;font-weight:600'>
-                Multi-touch sequences
-            </span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
     # Prereq check
     has_ai = api_keys.has_key('cerebras') or api_keys.has_key('claude')
     has_email = smtp_sender.is_configured()
-
     if not has_ai:
-        st.error("⚠️ The Sales Bot needs AI. Connect Cerebras or Claude in **Setup → AI Providers** first.")
+        st.error("⚠️ Aqua needs AI. Connect Cerebras or Claude in **Setup → AI Providers** first.")
         if st.button("→ Go to AI Setup", type="primary"):
             st.session_state.page = "setup"
             st.rerun()
         return
-
     if not has_email:
-        st.warning("⚠️ Email not connected. The bot can draft messages but can't send or check inbox until you connect SMTP/IMAP in **Setup**.")
+        st.warning("⚠️ Email not connected. Aqua can draft but can't send or watch your inbox until you finish **Setup → 📧 Email**.")
 
-    tab_chat, tab_engagement, tab_responder, tab_train, tab_knowledge, tab_logs = st.tabs([
-        "💬 Chat with Aqua",
-        "🚀 Auto-Engagement",
-        "📨 Inbox Watcher",
-        "🎓 Train / Roleplay",
-        "📚 Knowledge Base",
-        "📜 Activity",
-    ])
+    _show_aqua_mode_toggle()
+    st.markdown("---")
+    _show_aqua_config_sections()
+    st.markdown("---")
 
-    with tab_chat:
+    # Detailed controls + chat live below as collapsed expanders so the
+    # main page is clean but everything stays accessible.
+    with st.expander("💬 Chat with Aqua (free-form)", expanded=False):
         _show_freeform_chat()
-    with tab_engagement:
-        _show_engagement_panel()
-    with tab_responder:
-        _show_responder_panel()
-    with tab_train:
+    with st.expander("🎓 Train / Roleplay", expanded=False):
         _show_training_chat()
-    with tab_knowledge:
+    with st.expander("📚 Knowledge Base — feed Aqua docs", expanded=False):
         _show_knowledge_base()
-    with tab_logs:
+    with st.expander("📜 Activity log", expanded=False):
         _show_bot_logs()
+    with st.expander("🧪 Test the bot end-to-end (send yourself a test)", expanded=False):
+        _show_bot_test_panel()
+
+
+def _show_aqua_mode_toggle():
+    """The big OFF / DRAFTING / AUTONOMOUS picker."""
+    import aqua as _aqua
+    summary = _aqua.get_status_summary()
+    current = summary['mode']
+
+    st.html(
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+        "color:#94a3b8;letter-spacing:0.18em;text-transform:uppercase;"
+        "font-weight:700;margin-bottom:0.6rem'>◢ AQUA'S MODE</div>"
+    )
+
+    # Three big buttons. Picked button stays highlighted via inline CSS.
+    cols = st.columns(3)
+    button_specs = [
+        ('off',        '⏸ OFF',          '#94a3b8',
+         'Nothing automated. Pure manual: you draft, you approve, you send.'),
+        ('drafting',   '✍️ DRAFTING',    '#06b6d4',
+         "Aqua finds leads, drafts replies, watches inbox. You approve every send."),
+        ('autonomous', '🚀 AUTONOMOUS',  '#a3e635',
+         "Aqua does it all end-to-end. Replies + new outreach auto-send with a "
+         "60-180s natural delay (configurable below)."),
+    ]
+    for i, (key, label, color, blurb) in enumerate(button_specs):
+        is_current = (current == key)
+        with cols[i]:
+            if is_current:
+                st.html(
+                    f"<div style='background:linear-gradient(135deg,{color}33,{color}11);"
+                    f"border:2px solid {color};border-radius:14px;padding:0.9rem 1rem;"
+                    f"text-align:center;margin-bottom:0.4rem'>"
+                    f"<div style='font-size:1.1rem;font-weight:800;color:{color};"
+                    f"letter-spacing:0.04em'>{label}</div>"
+                    f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;"
+                    f"letter-spacing:0.08em;font-weight:600;margin-top:0.2rem'>"
+                    f"CURRENT MODE</div></div>"
+                )
+            else:
+                if st.button(label, key=f"aqua_mode_{key}",
+                              use_container_width=True, type="secondary"):
+                    ok, msg = _aqua.set_mode(key)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+                    st.rerun()
+            st.caption(blurb)
+
+
+def _show_aqua_config_sections():
+    """Tunable knobs — collapsed by default so the page is clean,
+    but everything that used to be on the Sales Bot tabs is reachable.
+    """
+    import aqua as _aqua
+    cfg = _aqua.load_config()
+    summary = _aqua.get_status_summary()
+    watcher_state = summary['watcher_state']
+    eng_state = summary['engagement_state']
+
+    # --- INBOX WATCHER -----------------------------------------------------
+    with st.expander(
+        f"📥 Inbox watching · "
+        f"polls every {cfg['watcher_interval_min']} min" +
+        (f" · last check {(watcher_state.get('last_check') or '')[:19].replace('T',' ')}"
+         if watcher_state.get('last_check') else ""),
+        expanded=False,
+    ):
+        st.caption("How often Aqua checks your inbox for new prospect replies. "
+                    "Lower = more responsive, slightly more IMAP traffic.")
+        new_interval = st.slider(
+            "Poll interval (minutes)",
+            min_value=1, max_value=60,
+            value=int(cfg['watcher_interval_min']),
+            step=1, key="cfg_watcher_interval",
+        )
+        if new_interval != cfg['watcher_interval_min']:
+            _aqua.save_config({'watcher_interval_min': new_interval})
+            try:
+                # Apply to a running watcher so the new interval sticks
+                if email_responder.is_running():
+                    email_responder.update_state(check_interval_minutes=new_interval)
+            except Exception:
+                pass
+            st.rerun()
+        if st.button("🔍 Check inbox right now", key="cfg_watcher_check_now",
+                      use_container_width=True):
+            with st.spinner("Checking..."):
+                email_responder.run_one_check()
+            st.success("Done. See Activity log below.")
+
+    # --- AUTO-ENGAGEMENT (outbound) ----------------------------------------
+    with st.expander(
+        f"🚀 Outbound auto-engagement · "
+        f"min score {cfg['engagement_min_score']} · "
+        f"max {cfg['engagement_max_per_run']}/cycle · "
+        f"hunt every {cfg['engagement_heavy_min']} min" +
+        (f" · last cycle {(eng_state.get('last_run') or '')[:19].replace('T',' ')}"
+         if eng_state.get('last_run') else ""),
+        expanded=False,
+    ):
+        st.caption(
+            "Aqua scans your CRM each hunt cycle, picks the leads above the score "
+            "threshold who haven't been touched recently, and drafts (or sends) a "
+            "personalized NEPQ email."
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            min_score = st.slider("Min lead score to engage",
+                                    30, 100,
+                                    int(cfg['engagement_min_score']), 5,
+                                    key="cfg_eng_score",
+                                    help="Only leads at or above this AI score get auto-engaged.")
+            max_run = st.slider("Max emails per hunt cycle",
+                                  1, 25,
+                                  int(cfg['engagement_max_per_run']), 1,
+                                  key="cfg_eng_max",
+                                  help="Politeness cap. Higher = faster pipeline build, more API spend.")
+        with c2:
+            heavy_min = st.slider("Hunt cycle interval (minutes)",
+                                    5, 120,
+                                    int(cfg['engagement_heavy_min']), 5,
+                                    key="cfg_eng_heavy",
+                                    help="How often Aqua scans for new candidates + drafts a fresh batch. "
+                                         "Doesn't affect the auto-send timer (set in 'Auto-send timer' below).")
+            fu_enabled = st.checkbox("Schedule Day 3 / 7 / 14 / 21 follow-ups",
+                                       value=bool(cfg['engagement_followups_enabled']),
+                                       key="cfg_eng_fu",
+                                       help="If on, Aqua queues follow-up touches per the NEPQ cadence.")
+
+        changed = (min_score != cfg['engagement_min_score']
+                   or max_run != cfg['engagement_max_per_run']
+                   or heavy_min != cfg['engagement_heavy_min']
+                   or fu_enabled != cfg['engagement_followups_enabled'])
+        if changed:
+            _aqua.save_config({
+                'engagement_min_score': int(min_score),
+                'engagement_max_per_run': int(max_run),
+                'engagement_heavy_min': int(heavy_min),
+                'engagement_followups_enabled': bool(fu_enabled),
+            })
+            # Push into the running engagement loop so changes apply
+            try:
+                if auto_engagement.is_running():
+                    cur_cfg = auto_engagement.get_state().get('config', {})
+                    cur_cfg.update({
+                        'min_score': int(min_score),
+                        'max_per_run': int(max_run),
+                        'engagement_interval_minutes': int(heavy_min),
+                        'follow_up_enabled': bool(fu_enabled),
+                    })
+                    auto_engagement.update_state(config=cur_cfg)
+            except Exception:
+                pass
+            st.success("Saved.")
+            st.rerun()
+
+        # Quick stats
+        stats = eng_state.get('stats', {}) or {}
+        if eng_state.get('running'):
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("Initial drafts", stats.get('initial_emails_drafted', 0))
+            sc2.metric("Initial sent", stats.get('initial_emails_sent', 0))
+            sc3.metric("Followups drafted", stats.get('followups_drafted', 0))
+            sc4.metric("Followups sent", stats.get('followups_sent', 0))
+
+    # --- AUTO-SEND TIMER ---------------------------------------------------
+    with st.expander(
+        f"⏱ Auto-send timer · {cfg['send_delay_min_sec']}–{cfg['send_delay_max_sec']}s natural delay",
+        expanded=False,
+    ):
+        st.caption(
+            "Every auto-send (inbound reply OR new outbound) waits a randomized "
+            "delay before firing. Keeps Aqua from looking robot-fast and gives "
+            "you time to hit Cancel timer if you spot something off."
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            min_d = st.slider("Min delay (seconds)",
+                                5, 600,
+                                int(cfg['send_delay_min_sec']), 5,
+                                key="cfg_send_min")
+        with c2:
+            max_d = st.slider("Max delay (seconds)",
+                                5, 600,
+                                int(cfg['send_delay_max_sec']), 5,
+                                key="cfg_send_max")
+        if max_d < min_d:
+            max_d = min_d
+            st.caption("(Max can't be less than min — auto-corrected.)")
+        if (min_d != cfg['send_delay_min_sec']
+                or max_d != cfg['send_delay_max_sec']):
+            _aqua.save_config({
+                'send_delay_min_sec': int(min_d),
+                'send_delay_max_sec': int(max_d),
+            })
+            st.success(f"Saved. New auto-sends will wait {min_d}–{max_d}s.")
+            st.rerun()
 
 
 def _show_freeform_chat():

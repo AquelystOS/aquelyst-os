@@ -47,3 +47,4 @@ env/
 
 # ===== Streamlit cache =====
 .streamlit/cache
+aqua_config.json

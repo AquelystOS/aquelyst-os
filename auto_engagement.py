@@ -319,30 +319,33 @@ def engage_lead_initial(lead, auto_send=False):
                                 'score': review['score']})
 
     if auto_send:
-        # Approve + send (draft_id passed for click-tracking link rewriting)
+        # SCHEDULE the send with the configured natural-delay window
+        # instead of firing immediately. Joseph's UX rule: every auto-
+        # send goes through a countdown so prospects don't get a
+        # robotic-fast reply. The drain loop dispatches when the
+        # timer hits zero.
         database.approve_draft(draft_id)
-        success, send_msg = smtp_sender.send_email(
-            lead['email'], result['subject'], result['body'],
-            draft_id=draft_id,
-        )
-        if success:
-            database.mark_draft_sent(draft_id)
-            database.update_lead(lead['id'],
-                                  status='contacted',
-                                  last_contacted=datetime.now().isoformat())
-            # Schedule Day 3 follow-up
-            database.schedule_follow_up(lead['id'], 'nepq_day_3', 3)
-            database.log_activity(lead['id'], 'auto_engagement_sent',
-                                   f"Auto-sent NEPQ initial: {result['subject'][:40]}")
-            increment_stat('initial_emails_sent')
-            log_event('sent',
-                       f"📤 Sent initial NEPQ to {lead['business_name']} ({result['source']})",
-                       details={'lead_id': lead['id']})
-            return draft_id
-        else:
-            log_event('error', f"Send failed for {lead['business_name']}: {send_msg}")
-            increment_stat('errors')
-            return None
+        try:
+            import aqua as _aqua
+            _cfg = _aqua.load_config()
+            min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
+            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
+        except Exception:
+            min_d, max_d = 60, 180
+        import random as _random
+        from datetime import timedelta as _td
+        delay_sec = _random.randint(min_d, max_d)
+        send_at = (datetime.utcnow() + _td(seconds=delay_sec)).isoformat()
+        database.schedule_draft_send(draft_id, send_at)
+        database.update_lead(lead['id'], status='drafted')  # countdown not yet sent
+        database.log_activity(lead['id'], 'auto_engagement_scheduled',
+                               f"⏱ NEPQ initial scheduled in {delay_sec}s")
+        increment_stat('initial_emails_drafted')
+        log_event('scheduled',
+                   f"⏱ Initial NEPQ scheduled → {lead['business_name']} (in {delay_sec}s)",
+                   details={'lead_id': lead['id'], 'draft_id': draft_id,
+                            'delay_sec': delay_sec})
+        return draft_id
     else:
         # Just drafted — needs human approval
         database.update_lead(lead['id'], status='drafted')
@@ -449,7 +452,35 @@ def engage_lead_followup(lead, auto_send=False):
                                 'score': review['score']})
 
     if auto_send:
+        # Schedule with the configured natural-delay window. Followups
+        # ride the same countdown plumbing as initials and inbound
+        # auto-replies so the user sees one consistent UX.
         database.approve_draft(draft_id)
+        try:
+            import aqua as _aqua
+            _cfg = _aqua.load_config()
+            min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
+            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
+        except Exception:
+            min_d, max_d = 60, 180
+        import random as _random
+        from datetime import timedelta as _td
+        delay_sec = _random.randint(min_d, max_d)
+        send_at = (datetime.utcnow() + _td(seconds=delay_sec)).isoformat()
+        database.schedule_draft_send(draft_id, send_at)
+        database.log_activity(lead['id'], 'auto_followup_scheduled',
+                               f"⏱ Followup #{touch_number} scheduled in {delay_sec}s")
+        increment_stat('followups_drafted')
+        log_event('scheduled',
+                   f"⏱ Followup #{touch_number} scheduled → {lead['business_name']} (in {delay_sec}s)",
+                   details={'lead_id': lead['id'], 'draft_id': draft_id,
+                            'delay_sec': delay_sec})
+        return draft_id
+
+    # Legacy non-auto-send path retained below for completeness; the
+    # success/failure logging hooks are kept so any caller that
+    # bypasses scheduling (manual force-send) still produces stats.
+    if False and auto_send:
         success, _ = smtp_sender.send_email(
             lead['email'], result['subject'], result['body'],
             draft_id=draft_id,
