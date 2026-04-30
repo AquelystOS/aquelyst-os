@@ -3706,20 +3706,24 @@ def _inbox_status_fragment():
             f"Aqua</div></div>"
         )
         # Three quick-pick mode buttons in a sub-row so the user can
-        # toggle without leaving the inbox.
+        # toggle without leaving the inbox. Clicking the current mode
+        # toggles back to OFF (Joseph: every mode button should be
+        # toggleable on/off).
         bcols = st.columns(3)
         for i, (key, lbl) in enumerate([('off', '⏸'),
                                           ('drafting', '✍️'),
                                           ('autonomous', '🚀')]):
             with bcols[i]:
-                disabled = (mode == key)
+                is_curr = (mode == key)
+                btype = "primary" if is_curr else "secondary"
                 if st.button(lbl, key=f"inbox_aqua_{key}",
                               use_container_width=True,
-                              disabled=disabled,
+                              type=btype,
                               help={'off': 'Stop everything',
                                     'drafting': 'Watch + draft, you approve',
                                     'autonomous': 'Watch + draft + auto-send'}[key]):
-                    ok, m = _aqua.set_mode(key)
+                    target = 'off' if is_curr and key != 'off' else key
+                    ok, m = _aqua.set_mode(target)
                     if not ok:
                         st.error(m)
                     st.rerun()
@@ -5068,17 +5072,26 @@ def show_sales_bot():
     _show_aqua_config_sections()
     st.markdown("---")
 
-    # Detailed controls + chat live below as collapsed expanders so the
-    # main page is clean but everything stays accessible.
-    with st.expander("💬 Chat with Aqua (free-form)", expanded=False):
+    # Power-user surfaces in TABS (not expanders) — the freeform chat,
+    # knowledge base, etc. each contain their own inner expanders for
+    # things like quick-prompts and per-document detail. Streamlit
+    # forbids expander-inside-expander, so tabs are the right container.
+    tab_chat, tab_train, tab_kb, tab_log, tab_test = st.tabs([
+        "💬 Chat with Aqua",
+        "🎓 Train / Roleplay",
+        "📚 Knowledge Base",
+        "📜 Activity log",
+        "🧪 Test bot end-to-end",
+    ])
+    with tab_chat:
         _show_freeform_chat()
-    with st.expander("🎓 Train / Roleplay", expanded=False):
+    with tab_train:
         _show_training_chat()
-    with st.expander("📚 Knowledge Base — feed Aqua docs", expanded=False):
+    with tab_kb:
         _show_knowledge_base()
-    with st.expander("📜 Activity log", expanded=False):
+    with tab_log:
         _show_bot_logs()
-    with st.expander("🧪 Test the bot end-to-end (send yourself a test)", expanded=False):
+    with tab_test:
         _show_bot_test_panel()
 
 
@@ -5108,27 +5121,29 @@ def _show_aqua_mode_toggle():
     for i, (key, label, color, blurb) in enumerate(button_specs):
         is_current = (current == key)
         with cols[i]:
+            # The current-mode button is clickable too. Clicking the
+            # current OFF does nothing useful, but clicking the current
+            # DRAFTING or AUTONOMOUS toggles back to OFF — that's what
+            # Joseph asked for: "that autonomous button should be able
+            # to be toggled on and off." A small "current" badge stays
+            # visible so the active state is obvious.
+            display_label = (
+                f"{label}  ·  ✓ CURRENT" if is_current else label
+            )
+            btype = "primary" if is_current else "secondary"
+            if st.button(display_label, key=f"aqua_mode_{key}",
+                          use_container_width=True, type=btype):
+                target = 'off' if is_current else key
+                ok, msg = _aqua.set_mode(target)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+                st.rerun()
             if is_current:
-                st.html(
-                    f"<div style='background:linear-gradient(135deg,{color}33,{color}11);"
-                    f"border:2px solid {color};border-radius:14px;padding:0.9rem 1rem;"
-                    f"text-align:center;margin-bottom:0.4rem'>"
-                    f"<div style='font-size:1.1rem;font-weight:800;color:{color};"
-                    f"letter-spacing:0.04em'>{label}</div>"
-                    f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;"
-                    f"letter-spacing:0.08em;font-weight:600;margin-top:0.2rem'>"
-                    f"CURRENT MODE</div></div>"
-                )
+                st.caption(f"✅ Currently {key.upper()} — click again to turn OFF.")
             else:
-                if st.button(label, key=f"aqua_mode_{key}",
-                              use_container_width=True, type="secondary"):
-                    ok, msg = _aqua.set_mode(key)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-                    st.rerun()
-            st.caption(blurb)
+                st.caption(blurb)
 
 
 def _show_aqua_config_sections():
