@@ -5302,6 +5302,18 @@ def _aqua_live_activity_fragment():
     share one query per 3-5s instead of each independently hitting
     Postgres.
     """
+    # Watchdog — every 10s, if Aqua's mode says autonomous/drafting
+    # but the underlying loops have gone silent, restart them. Joseph
+    # shouldn't need to force-fire anything; this makes "set it and
+    # forget it" actually work even after container restarts.
+    try:
+        import aqua as _aqua_wd
+        restarted = _aqua_wd.ensure_running()
+        if restarted:
+            st.toast(f"🔄 Watchdog restarted: {', '.join(restarted)}", icon="🤖")
+    except Exception:
+        pass
+
     summary = _cached_aqua_summary()
     mode = summary['mode']
 

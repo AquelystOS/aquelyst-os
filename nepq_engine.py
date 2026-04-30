@@ -379,6 +379,20 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
                             database.team_keys_mark_ok(owner_email, 'cerebras')
                         except Exception:
                             pass
+                    # Log to GLOBAL provider counter so the load
+                    # distribution dashboard reflects Cerebras usage.
+                    # Without this, Cerebras's request count stays at 0
+                    # while every other provider gets logged via
+                    # _openai_compat_chat → least-loaded sort then
+                    # picks Cerebras every time, but its true usage is
+                    # invisible on the dashboard. Joseph 2026-04-30:
+                    # 'cerebras is not even hardly used' — actually it
+                    # WAS being used, just not counted.
+                    try:
+                        import database
+                        database.provider_log_ok('cerebras', model)
+                    except Exception:
+                        pass
                     return r.json()['choices'][0]['message']['content'], None
                 last_err = f"Cerebras {r.status_code} on {model}: {r.text[:120]}"
                 if r.status_code == 404:
@@ -430,11 +444,24 @@ def _cerebras_chat(messages, max_tokens=1024, temperature=0.7):
                     timeout=30,
                 )
                 if r.status_code == 200:
+                    try:
+                        import database
+                        database.provider_log_ok('cerebras', model)
+                    except Exception:
+                        pass
                     return r.json()['choices'][0]['message']['content'], None
                 last_err = f"Cerebras {r.status_code} on {model} (retry): {r.text[:80]}"
             except Exception as e:
                 last_err = f"Cerebras retry error: {str(e)[:80]}"
 
+    # Every key exhausted — log a global error so the cooldown logic
+    # in chat() sees Cerebras as "recently failed" and gives others a
+    # turn instead of looping back to it immediately.
+    try:
+        import database
+        database.provider_log_err('cerebras', last_err[:200] or 'pool exhausted')
+    except Exception:
+        pass
     return None, last_err
 
 

@@ -1035,6 +1035,13 @@ def engagement_loop():
         if not state.get('running', False):
             break
 
+        # Heartbeat for the watchdog (aqua.ensure_running). If pulses
+        # stop, the watchdog restarts the loop automatically.
+        try:
+            update_state(last_pulse=datetime.now().isoformat())
+        except Exception:
+            pass
+
         try:
             run_one_cycle()
         except Exception as e:

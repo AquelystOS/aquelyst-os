@@ -914,6 +914,15 @@ def responder_loop():
         if not state.get('running', False):
             break
 
+        # Heartbeat — proves the loop is alive. The watchdog in
+        # aqua.ensure_running uses this to detect a dead thread and
+        # restart it automatically (without needing Joseph to toggle
+        # OFF→ON or click force-fire).
+        try:
+            update_state(last_pulse=datetime.now().isoformat())
+        except Exception:
+            pass
+
         try:
             run_one_check()
         except Exception as e:

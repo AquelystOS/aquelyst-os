@@ -226,6 +226,99 @@ def set_mode(mode):
     return True, f"Aqua is {label}."
 
 
+def ensure_running():
+    """Watchdog — if Aqua's mode is autonomous or drafting but the
+    underlying loops have gone silent (no heartbeat in 3+ min), kick
+    them back to life automatically. Called from the live activity
+    fragment so it runs every ~10 seconds whenever the user has the
+    Aqua page open.
+
+    Joseph's 2026-04-30 directive: 'i dont want to have to force fire
+    anything i want it to simply get an email form a response and
+    send it out.' This watchdog is what makes that true — even if a
+    Streamlit container restart killed the daemon thread, the next
+    page load detects the stale heartbeat and restarts.
+
+    Returns the list of subsystems that were restarted.
+    """
+    mode = get_mode()
+    if mode == 'off':
+        return []
+
+    import email_responder
+    import auto_engagement
+    from datetime import datetime as _dt, timedelta as _td
+
+    STALE_THRESHOLD_MIN = 3
+    now = _dt.utcnow()
+    restarted = []
+
+    def _stale(state_dict):
+        pulse = (state_dict or {}).get('last_pulse')
+        if not pulse:
+            return True  # claims running but never pulsed → dead
+        try:
+            pulse_dt = _dt.fromisoformat(str(pulse).replace('Z', '+00:00'))
+            if pulse_dt.tzinfo is not None:
+                pulse_dt = pulse_dt.replace(tzinfo=None)
+            return (now - pulse_dt) > _td(minutes=STALE_THRESHOLD_MIN)
+        except Exception:
+            return True
+
+    cfg = load_config()
+    auto_send = (mode == 'autonomous')
+
+    # Watcher: is it claiming-running but heartbeat-stale?
+    try:
+        watcher_state = email_responder.get_state() or {}
+        if watcher_state.get('running') and _stale(watcher_state):
+            email_responder.stop_responder()
+            email_responder.start_responder(
+                check_interval_minutes=cfg['watcher_interval_min'],
+                auto_reply_mode='send' if auto_send else 'draft',
+            )
+            restarted.append('watcher')
+        elif not watcher_state.get('running'):
+            # Should be running per aqua mode but isn't → start it
+            email_responder.start_responder(
+                check_interval_minutes=cfg['watcher_interval_min'],
+                auto_reply_mode='send' if auto_send else 'draft',
+            )
+            restarted.append('watcher')
+    except Exception:
+        pass
+
+    # Engagement: same logic
+    try:
+        eng_state = auto_engagement.get_state() or {}
+        eng_cfg = (eng_state.get('config') or {})
+        if eng_state.get('running') and _stale(eng_state):
+            auto_engagement.stop_engagement()
+            auto_engagement.start_engagement(
+                min_score=cfg['engagement_min_score'],
+                auto_send=auto_send,
+                check_interval_minutes=1,
+                max_per_run=cfg['engagement_max_per_run'],
+                follow_up_enabled=cfg['engagement_followups_enabled'],
+                started_by_user_email=eng_cfg.get('started_by_user_email'),
+            )
+            restarted.append('engagement')
+        elif not eng_state.get('running'):
+            auto_engagement.start_engagement(
+                min_score=cfg['engagement_min_score'],
+                auto_send=auto_send,
+                check_interval_minutes=1,
+                max_per_run=cfg['engagement_max_per_run'],
+                follow_up_enabled=cfg['engagement_followups_enabled'],
+                started_by_user_email=eng_cfg.get('started_by_user_email'),
+            )
+            restarted.append('engagement')
+    except Exception:
+        pass
+
+    return restarted
+
+
 def get_status_summary():
     """Compact dict for the inbox/today status pill."""
     mode = get_mode()
