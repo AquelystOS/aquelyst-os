@@ -5323,47 +5323,70 @@ def _aqua_live_activity_fragment():
             f"{mode_label}</div></div>"
         )
     with cols[1]:
-        scheduled_color = '#a3e635' if scheduled_count > 0 else '#475569'
-        # Compute drain-time so the user knows how long the FIFO queue
-        # takes to clear. The latest scheduled draft is the tail of
-        # the queue; its scheduled_send_at minus now = total queue
-        # length. With 1-min FIFO spacing, a 200-deep queue = 200 min.
-        latest_secs = 0
-        try:
-            for d in pending:
-                sched = d.get('scheduled_send_at')
-                if not sched:
-                    continue
-                from datetime import datetime as _dt2
-                sched_dt2 = _dt2.fromisoformat(str(sched).replace('Z', '+00:00'))
-                if sched_dt2.tzinfo is not None:
-                    sched_dt2 = sched_dt2.replace(tzinfo=None)
-                secs2 = int((sched_dt2 - now_utc).total_seconds())
-                if secs2 > latest_secs:
-                    latest_secs = secs2
-        except Exception:
-            pass
-        if latest_secs > 0:
-            drain_h = latest_secs // 3600
-            drain_m = (latest_secs % 3600) // 60
-            if drain_h > 0:
-                drain_label = f"clears in {drain_h}h {drain_m}m"
-            else:
-                drain_label = f"clears in {drain_m}m"
+        # When Aqua is OFF, scheduled_count should be 0 (timers cleared)
+        # — but if any leftover snuck through, show 0 + "paused" so the
+        # card never reports a queue count that's actually stalled.
+        if mode == 'off':
+            scheduled_count_display = 0
+            drain_label = "paused — Aqua is OFF"
         else:
-            drain_label = "queue empty"
+            scheduled_count_display = scheduled_count
+            # Compute drain-time so the user knows how long the FIFO queue
+            # takes to clear. The latest scheduled draft is the tail of
+            # the queue; its scheduled_send_at minus now = total queue
+            # length. With 1-min FIFO spacing, a 200-deep queue = 200 min.
+            latest_secs = 0
+            try:
+                for d in pending:
+                    sched = d.get('scheduled_send_at')
+                    if not sched:
+                        continue
+                    from datetime import datetime as _dt2
+                    sched_dt2 = _dt2.fromisoformat(str(sched).replace('Z', '+00:00'))
+                    if sched_dt2.tzinfo is not None:
+                        sched_dt2 = sched_dt2.replace(tzinfo=None)
+                    secs2 = int((sched_dt2 - now_utc).total_seconds())
+                    if secs2 > latest_secs:
+                        latest_secs = secs2
+            except Exception:
+                pass
+            if latest_secs > 0:
+                drain_h = latest_secs // 3600
+                drain_m = (latest_secs % 3600) // 60
+                if drain_h > 0:
+                    drain_label = f"clears in {drain_h}h {drain_m}m"
+                else:
+                    drain_label = f"clears in {drain_m}m"
+            else:
+                drain_label = "queue empty"
+        scheduled_color = '#a3e635' if scheduled_count_display > 0 else '#475569'
         st.html(
             f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.20);"
             f"border-radius:12px;padding:0.7rem 0.9rem;text-align:center'>"
             f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
             f"letter-spacing:0.08em;font-weight:700'>SCHEDULED</div>"
             f"<div style='font-size:1.4rem;font-weight:800;color:{scheduled_color};"
-            f"margin-top:0.1rem;line-height:1'>{scheduled_count}</div>"
+            f"margin-top:0.1rem;line-height:1'>{scheduled_count_display}</div>"
             f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>"
             f"queued · {drain_label}</div></div>"
         )
     with cols[2]:
-        if soonest_secs is not None:
+        # Suppress the live countdown when Aqua is OFF — the drain
+        # isn't running so the timer would be lying about sends that
+        # won't happen. Show a "PAUSED" placeholder instead.
+        if mode == 'off':
+            st.html(
+                f"<div style='background:rgba(15,23,42,0.55);"
+                f"border:1px solid rgba(148,163,184,0.20);border-radius:12px;"
+                f"padding:0.7rem 0.9rem;text-align:center'>"
+                f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+                f"letter-spacing:0.08em;font-weight:700'>NEXT FIRES IN</div>"
+                f"<div style='font-size:1.0rem;font-weight:800;color:#475569;"
+                f"margin-top:0.3rem'>⏸ paused</div>"
+                f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>"
+                f"flip ON to resume</div></div>"
+            )
+        elif soonest_secs is not None:
             biz = (soonest.get('business_name') or '?')[:22]
             # Self-contained iframe ticks every second
             st.html(
@@ -5610,7 +5633,7 @@ def _show_aqua_config_sections():
 
     # --- CRM HYGIENE -------------------------------------------------------
     with st.expander(
-        "🧹 CRM hygiene — dedupe leads + show capability stats",
+        "🧹 CRM hygiene — dedupe leads + clear scheduled queue",
         expanded=False,
     ):
         st.caption(
@@ -5637,6 +5660,22 @@ def _show_aqua_config_sections():
                     k, d, m = autopilot.dedupe_existing_leads(dry_run=False)
                 st.success(f"Kept {k} unique · deleted {d} dupes · "
                            f"merged {m} email(s) into keepers.")
+
+        st.markdown("---")
+        st.caption(
+            "If a previous session left a backlog of scheduled-send "
+            "drafts that you want to wipe, this clears every "
+            "scheduled_send_at without deleting the drafts themselves. "
+            "Drafts stay pending; you can manually approve them or "
+            "flip Aqua to AUTONOMOUS to re-queue them FIFO from now."
+        )
+        if st.button("⏹ Clear ALL scheduled-send timers",
+                      key="aqua_clear_queue",
+                      use_container_width=True):
+            n = database.clear_all_scheduled_sends()
+            st.success(f"✅ Cleared {n} timer(s). Drafts remain "
+                       f"pending — flip to AUTONOMOUS to re-queue.")
+            st.rerun()
 
     # --- AUTO-SEND TIMER ---------------------------------------------------
     with st.expander(
@@ -9899,9 +9938,16 @@ def setup_data_tab():
 # ===========================================================================
 def _stop_all_autonomy():
     """Stop every autonomous worker — auto-engagement, inbox watcher,
-    autopilot. Used on logout AND on fresh login so bots never run
-    'invisibly' across sessions. Joseph's rule: every restart requires
-    an explicit toggle-on.
+    autopilot — AND clear all pending scheduled-send timers. Used on
+    logout AND on fresh login so bots never run 'invisibly' across
+    sessions and stale timers don't lie about future sends that won't
+    happen.
+
+    Joseph's 2026-04-30 bug: he logged in, saw Aqua OFF, but the live
+    activity panel showed 186 scheduled drafts counting down. Root
+    cause: the OFF-clears-timers logic only fired when toggling
+    through aqua.set_mode('off'), not when login/logout went through
+    this _stop_all_autonomy bypass. Now both paths clear timers.
     """
     try:
         auto_engagement.stop_engagement()
@@ -9913,6 +9959,12 @@ def _stop_all_autonomy():
         pass
     try:
         autopilot.stop_autopilot()
+    except Exception:
+        pass
+    # Clear all pending timers so the inbox/live-activity countdowns
+    # don't lie about sends that won't fire (drain is stopped).
+    try:
+        database.clear_all_scheduled_sends()
     except Exception:
         pass
 
