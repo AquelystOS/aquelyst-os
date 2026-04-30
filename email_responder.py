@@ -534,8 +534,23 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                        f"Failed to auto-create lead for {lookup_email}: {str(e)[:80]}")
             return None
 
+    # Strip our own CAN-SPAM footer from the body before classifying — the
+    # auto-classifier saw "Unsubscribe:" in the footer and mis-flagged the
+    # whole email as an unsubscribe request, suppressing the prospect's
+    # address even when they were replying with positive intent. The
+    # footer is appended by smtp_sender._build_can_spam_footer() so we
+    # know the marker — the "—" line followed by "Sent by AqueLyst".
+    body_for_classification = msg.get('body', '') or ''
+    for marker in ('\n—\nSent by AqueLyst',
+                    '\n--\nSent by AqueLyst',
+                    '\nSent by AqueLyst —'):
+        idx = body_for_classification.find(marker)
+        if idx >= 0:
+            body_for_classification = body_for_classification[:idx]
+            break
+
     # Classify intent
-    classification = nepq_engine.classify_inbound_intent(msg['body'])
+    classification = nepq_engine.classify_inbound_intent(body_for_classification)
     intent = classification.get('intent', 'other')
     suggested_status = classification.get('suggested_lead_status', 'researched')
     should_auto_reply = classification.get('should_auto_reply', True)
@@ -585,9 +600,20 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                                f"Inbound reply received but NOT promoted to 'interested' "
                                f"(unsolicited — not a reply to our outreach).")
 
-    # Special handling for unsubscribe
+    # Special handling for unsubscribe — but NEVER auto-suppress a
+    # teammate's email address. If a team member replies to a thread, we
+    # don't want them mis-flagged as unsubscribed (which would block all
+    # future sends to them — exactly the bug Joseph hit when his test
+    # email-to-himself triggered this code path).
     if intent == 'unsubscribe':
-        if lead['email']:
+        import team as _team
+        is_teammate = _team.get_member_by_email(from_email) is not None
+        if is_teammate:
+            log_event('classified',
+                       f"⏭ 'Unsubscribe' intent from teammate {from_email} — "
+                       f"skipping auto-suppress (probably reading their own "
+                       f"footer back). No action taken.")
+        elif lead['email']:
             database.add_to_suppression(lead['email'], 'reply_unsubscribe')
         return None
 
