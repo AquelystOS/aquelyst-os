@@ -890,52 +890,96 @@ def chat(messages, prefer='auto', extra_context=''):
 
     last_err = ""
     if prefer == 'auto':
-        # Load-balance across all connected providers using Least-Recently-Used.
-        # Free-tier providers always come before paid (so we don't burn $ when free works),
-        # but WITHIN each tier, the LRU provider goes first. This naturally distributes
-        # load across all 4 free providers if you've connected them all.
+        # BALANCED FREE-POOL ROTATION
+        # Joseph's rule (2026-04-30): "spread out evenly so theres a
+        # large pool of free llm use we dont want to max any free llms
+        # out rather spread usage evenly across all."
+        #
+        # Strategy:
+        #   1. List ALL connected free providers
+        #   2. Pick the one with the LOWEST total_requests count — this
+        #      is the literal "least loaded" provider, NOT just LRU.
+        #      LRU only tracks last-used time, which doesn't equalize
+        #      total volume; least-loaded actively pulls usage toward
+        #      whichever provider is currently behind.
+        #   3. Skip any provider that's in cooldown (failed within last
+        #      5 min) so a broken provider doesn't keep stealing turns.
+        #   4. Paid tier only used when EVERY free provider is exhausted
+        #      or in cooldown.
         FREE_TIER = ['cerebras', 'groq', 'together', 'mistral', 'cohere']
         PAID_TIER = ['claude', 'deepseek', 'openrouter', 'openai']
 
-        # What providers are actually connected right now?
         free_connected = [p for p in FREE_TIER if api_keys.has_key(p)]
         paid_connected = [p for p in PAID_TIER if api_keys.has_key(p)]
 
-        # Pull last_used_at from DB to sort LRU-first
+        # Pull stats from DB. total_requests is the cumulative count
+        # since the user last hit "Reset counters" on the admin page.
         try:
             import database
-            log_rows = {row['provider']: row for row in database.provider_log_all()}
+            log_rows = {row['provider']: dict(row) for row in database.provider_log_all()}
         except Exception:
             log_rows = {}
 
-        def lru_key(pid):
+        # Cooldown: if a provider had an error within the last 5 minutes,
+        # skip it this turn so it doesn't burn the rotation slot.
+        from datetime import datetime as _dt, timedelta as _td
+        COOLDOWN_MIN = 5
+        cooldown_floor = _dt.utcnow() - _td(minutes=COOLDOWN_MIN)
+
+        def in_cooldown(pid):
             row = log_rows.get(pid, {}) or {}
-            # Providers never used → '' sorts before any timestamp → tried first
-            return row.get('last_used_at') or ''
+            last_err_ts = row.get('last_err_at') or ''
+            if not last_err_ts:
+                return False
+            try:
+                ts = _dt.fromisoformat(str(last_err_ts).replace('Z', '+00:00'))
+                if ts.tzinfo is not None:
+                    ts = ts.replace(tzinfo=None)
+                return ts > cooldown_floor
+            except Exception:
+                return False
 
-        free_connected.sort(key=lru_key)
-        paid_connected.sort(key=lru_key)
+        def request_count(pid):
+            row = log_rows.get(pid, {}) or {}
+            return int(row.get('total_requests') or 0)
 
-        # Mark the chosen starter so it gets pushed to back of next rotation
-        # (we mark it BEFORE the call so even if it fails it rotates)
-        if free_connected:
+        # Filter out cooldown'd providers
+        free_active = [p for p in free_connected if not in_cooldown(p)]
+        paid_active = [p for p in paid_connected if not in_cooldown(p)]
+
+        # If every free provider is in cooldown, allow them all again
+        # (better to retry a failing provider than to fall through to
+        # paid prematurely).
+        if free_connected and not free_active:
+            free_active = list(free_connected)
+
+        # Sort by LEAST requests first → next call goes to whichever
+        # provider is currently behind on volume. This actively balances
+        # the pool toward equal usage instead of just rotating round-robin.
+        free_active.sort(key=request_count)
+        paid_active.sort(key=request_count)
+
+        # Mark the starter so the counter increments even if the call fails
+        # (prevents one provider from getting all the attempts when others
+        # are healthy but happen to be behind on the count).
+        if free_active:
             try:
                 import database
-                database.provider_log_pick(free_connected[0])
+                database.provider_log_pick(free_active[0])
             except Exception:
                 pass
 
         attempts = []
-        # Cerebras gets the special key-pool rotation logic
-        for pid in free_connected:
+        for pid in free_active:
             if pid == 'cerebras':
                 _msgs = [{"role": "system", "content": system}] + messages
                 attempts.append(('cerebras', lambda m=_msgs: _cerebras_chat(m)))
             else:
                 _msgs = [{"role": "system", "content": system}] + messages
                 attempts.append((pid, lambda p=pid, m=_msgs: _openai_compat_chat(m, p)))
-        # Then paid tier as backup, also LRU-ordered
-        for pid in paid_connected:
+        # Paid tier as backup ONLY — only reachable if every free
+        # provider in this attempt list failed.
+        for pid in paid_active:
             if pid == 'claude':
                 attempts.append(('claude', lambda: _claude_chat(messages, system_prompt=system)))
             else:

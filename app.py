@@ -2011,7 +2011,45 @@ def _admin_keys_section():
              for r in log_rows if (r.get('total_requests') or 0) > 0]
     if used:
         total_all = sum(t for _, t, _, _ in used) or 1
+        # Balance score: 100% = perfectly even spread across providers,
+        # 0% = one provider doing everything. Joseph's rule: "spread
+        # usage evenly across all" free providers. Computed as the
+        # percentage of "ideal-distribution" requests that actually
+        # fell in their target buckets.
+        FREE_PROVIDERS = {'cerebras', 'groq', 'together', 'mistral', 'cohere'}
+        free_used = [(p, t) for p, t, _, _ in used if p in FREE_PROVIDERS]
+        balance_pct = None
+        balance_label = ''
+        if len(free_used) >= 2:
+            free_total = sum(t for _, t in free_used) or 1
+            ideal = free_total / len(free_used)
+            # Sum of |actual - ideal| measures total imbalance
+            deviation = sum(abs(t - ideal) for _, t in free_used)
+            # Worst case: one provider has ALL traffic → deviation = 2*(N-1)/N * total
+            worst_dev = 2 * (len(free_used) - 1) / len(free_used) * free_total
+            balance_pct = round(100 * (1 - deviation / worst_dev)) if worst_dev else 100
+            balance_pct = max(0, min(100, balance_pct))
+            if balance_pct >= 80:
+                balance_label = '🟢 well balanced'
+                balance_color = '#16a34a'
+            elif balance_pct >= 50:
+                balance_label = '🟡 some skew'
+                balance_color = '#f59e0b'
+            else:
+                balance_label = '🔴 unbalanced — check provider health'
+                balance_color = '#dc2626'
+
         st.markdown("**📊 Load distribution (since last reset)**")
+        if balance_pct is not None:
+            st.html(
+                f"<div style='display:flex;gap:0.5rem;align-items:center;"
+                f"margin-bottom:0.5rem;flex-wrap:wrap'>"
+                f"<span style='font-size:0.8rem;color:#94a3b8'>Free-pool balance:</span>"
+                f"<span style='font-family:JetBrains Mono,monospace;font-weight:700;"
+                f"color:{balance_color};font-size:1rem'>{balance_pct}%</span>"
+                f"<span style='font-size:0.8rem;color:#cbd5e1'>{balance_label}</span>"
+                f"</div>"
+            )
 
         def _gradient_color_at(pct):
             """Lerp cyan #06b6d4 → lime #a3e635 along usage %.
