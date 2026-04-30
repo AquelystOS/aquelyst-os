@@ -3594,8 +3594,18 @@ def _aqua_daily_brief():
 @st.fragment(run_every=30)
 def _inbox_status_fragment():
     """4 INTERACTIVE status cards — counts navigate, toggle cards toggle bots."""
-    sent = database.get_sent_drafts(limit=500)
-    pending = database.get_pending_drafts(limit=500)
+    # This fragment auto-refreshes every 30s. A transient DB blip (Supabase
+    # pooler rotation, connection death between health-check and use) used
+    # to crash the entire inbox page. Wrap the queries so the cards just
+    # show '—' on a blip, and the next tick recovers.
+    try:
+        sent = database.get_sent_drafts(limit=500)
+    except Exception:
+        sent = []
+    try:
+        pending = database.get_pending_drafts(limit=500)
+    except Exception:
+        pending = []
     watcher_running = email_responder.is_running()
     engagement_running = auto_engagement.is_running()
 

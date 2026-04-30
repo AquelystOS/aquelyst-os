@@ -215,7 +215,39 @@ class _PgConnection:
         pass
 
     def cursor(self):
-        return _PgCursor(self._conn.cursor())
+        # Self-heal on dead connection: pooler rotations, container sleeps,
+        # and network blips can leave us holding a closed psycopg2 handle
+        # even after the SELECT 1 health check passed in get_connection().
+        # If the underlying cursor() call raises InterfaceError, mark the
+        # connection poisoned (so the pool evicts it on close) and try
+        # once on a fresh handle.
+        try:
+            return _PgCursor(self._conn.cursor())
+        except Exception as e:
+            cls_name = type(e).__name__
+            if cls_name not in ('InterfaceError', 'OperationalError'):
+                raise
+            # Mark this connection bad so close() doesn't return it to the
+            # pool for someone else to crash on.
+            try:
+                if hasattr(self, '_poisoned'):
+                    self._poisoned = True
+            except Exception:
+                pass
+            # Try to reconnect on this same wrapper. Pooled connections
+            # don't have a db_url, so swap in a brand-new direct one.
+            db_url = _get_database_url()
+            if not db_url:
+                raise
+            try:
+                import psycopg2
+                from psycopg2.extras import RealDictCursor
+                fresh = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+                fresh.autocommit = True
+                self._conn = fresh
+                return _PgCursor(self._conn.cursor())
+            except Exception:
+                raise e
 
     def execute(self, query, params=()):
         c = self.cursor()
