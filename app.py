@@ -2006,9 +2006,40 @@ def _admin_keys_section():
 
     # ── Live load distribution dashboard ────────────────────────────
     log_rows = database.provider_log_all()
-    used = [(r['provider'], r.get('total_requests') or 0,
-              r.get('ok_requests') or 0, r.get('err_requests') or 0)
-             for r in log_rows if (r.get('total_requests') or 0) > 0]
+    # Build a per-provider stats dict so we can render ALL connected
+    # providers (even at 0 req — without this, hitting Reset Counters
+    # makes the entire dashboard disappear until traffic resumes).
+    log_by_provider = {r['provider']: r for r in log_rows}
+    # Provider list: connected providers (from API key catalog) UNION
+    # any provider that has a log row. Order: free providers first,
+    # then paid, then anything else with a log row.
+    FREE_TIER_ORDER = ['cerebras', 'groq', 'together', 'mistral', 'cohere']
+    PAID_TIER_ORDER = ['claude', 'deepseek', 'openrouter', 'openai']
+    connected_set = set()
+    try:
+        for fp in FREE_TIER_ORDER + PAID_TIER_ORDER:
+            if api_keys.has_key(fp):
+                connected_set.add(fp)
+    except Exception:
+        pass
+    # Add any provider with a log row that's not already in the list
+    extra = [p for p in log_by_provider.keys()
+             if p not in connected_set
+             and p not in FREE_TIER_ORDER + PAID_TIER_ORDER]
+    ordered_providers = (
+        [p for p in FREE_TIER_ORDER if p in connected_set]
+        + [p for p in PAID_TIER_ORDER if p in connected_set]
+        + extra
+    )
+    used = []
+    for p in ordered_providers:
+        row = log_by_provider.get(p, {}) or {}
+        used.append((
+            p,
+            row.get('total_requests') or 0,
+            row.get('ok_requests') or 0,
+            row.get('err_requests') or 0,
+        ))
     if used:
         total_all = sum(t for _, t, _, _ in used) or 1
         # Balance score: 100% = perfectly even spread across providers,
@@ -2063,9 +2094,18 @@ def _admin_keys_section():
 
         cols = st.columns(len(used))
         for col, (pid, total, ok, err) in zip(cols, used):
-            pct = round(100 * total / total_all)
-            success_pct = round(100 * ok / total) if total else 0
-            color = '#16a34a' if success_pct >= 90 else '#f59e0b' if success_pct >= 60 else '#dc2626'
+            pct = round(100 * total / total_all) if total_all > 0 else 0
+            # When a provider has no traffic yet (post-reset, or just-
+            # connected), show neutral gray + "ready" rather than red
+            # "0% ok" which makes it look broken.
+            if total == 0:
+                success_pct = 0
+                color = '#94a3b8'  # neutral slate
+                health_label = 'ready'
+            else:
+                success_pct = round(100 * ok / total)
+                color = '#16a34a' if success_pct >= 90 else '#f59e0b' if success_pct >= 60 else '#dc2626'
+                health_label = f"{success_pct}% ok"
             # Brand-aligned text color tied to usage intensity
             usage_color = _gradient_color_at(pct)
             col.markdown(
@@ -2098,7 +2138,7 @@ def _admin_keys_section():
                 f"<div style='font-size:0.65rem;color:#94a3b8;margin-top:0.1rem'>"
                 f"of load</div>"
                 f"<div style='font-size:0.7rem;color:{color};font-weight:600;"
-                f"margin-top:0.25rem'>{success_pct}% ok</div>"
+                f"margin-top:0.25rem'>{health_label}</div>"
                 f"</div>", unsafe_allow_html=True
             )
         if st.button("Reset counters", key="reset_load_counters"):
