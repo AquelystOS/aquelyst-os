@@ -3665,24 +3665,15 @@ def _aqua_daily_brief():
         st.rerun()
 
 
-@st.fragment(run_every=5)
+@st.fragment(run_every=15)
 def _inbox_status_fragment():
     """3 cards: Sent / Drafts pending / Aqua status. Refreshes every
-    5 seconds (was 30) so new inbound emails show up quickly without
-    full page reloads."""
-    # Defensive against transient DB blips so a Supabase pooler death
-    # doesn't take down the whole inbox.
-    try:
-        sent = database.get_sent_drafts(limit=500)
-    except Exception:
-        sent = []
-    try:
-        pending = database.get_pending_drafts(limit=500)
-    except Exception:
-        pending = []
-
-    import aqua as _aqua
-    summary = _aqua.get_status_summary()
+    15 seconds. Uses cached DB helpers so refreshes don't hammer
+    Postgres — multiple fragments share a single query per 3-5s
+    cache window."""
+    sent = _cached_sent_drafts(limit=500)
+    pending = _cached_pending_drafts(limit=500)
+    summary = _cached_aqua_summary()
     mode = summary['mode']
 
     cols = st.columns(3)
@@ -5139,26 +5130,120 @@ def show_sales_bot():
         _show_bot_test_panel()
 
 
-@st.fragment(run_every=2)
+@st.cache_data(ttl=3, show_spinner=False)
+def _cached_pending_drafts(limit=200):
+    """Cached wrapper around database.get_pending_drafts so the live
+    fragments share one DB query per ~3 seconds instead of each
+    fragment hitting Postgres independently. The 3-second TTL means a
+    countdown displayed at 1:42 may actually still show 1:42 for 2-3
+    seconds before refreshing — acceptable trade-off for ~10x fewer
+    DB round-trips on busy pages.
+
+    Returns plain dicts (not _PgRowDict) because Streamlit's cache
+    serializes the return value.
+    """
+    try:
+        rows = database.get_pending_drafts(limit=limit) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        try:
+            out.append(dict(r))
+        except Exception:
+            try:
+                out.append({k: r[k] for k in r.keys()})
+            except Exception:
+                continue
+    return out
+
+
+@st.cache_data(ttl=3, show_spinner=False)
+def _cached_sent_drafts(limit=500):
+    try:
+        rows = database.get_sent_drafts(limit=limit) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        try:
+            out.append(dict(r))
+        except Exception:
+            continue
+    return out
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def _cached_inbound(limit=200, include_junk=False):
+    try:
+        rows = database.get_all_inbound(limit=limit, include_junk=include_junk) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        try:
+            out.append(dict(r))
+        except Exception:
+            continue
+    return out
+
+
+@st.cache_data(ttl=4, show_spinner=False)
+def _cached_drafts_for_lead(lead_id):
+    """Cached per-lead drafts lookup. _render_inbound_card calls this
+    for every card on every fragment refresh; without caching that's
+    N parallel queries per render. 4-second TTL is short enough that
+    the countdown badge stays accurate (the JS ticker updates the
+    visible seconds in between)."""
+    if not lead_id:
+        return []
+    try:
+        rows = database.get_drafts_for_lead(lead_id) or []
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        try:
+            out.append(dict(r))
+        except Exception:
+            continue
+    return out
+
+
+@st.cache_data(ttl=4, show_spinner=False)
+def _cached_aqua_summary():
+    """Cached wrapper for aqua.get_status_summary — the only thing that
+    changes second-to-second is the soonest-firing countdown which is
+    computed client-side via the JS ticker, not from this dict."""
+    try:
+        import aqua as _aqua
+        summary = _aqua.get_status_summary()
+        return {
+            'mode': summary.get('mode', 'off'),
+            'cfg': dict(summary.get('cfg') or {}),
+            'watcher_state': dict(summary.get('watcher_state') or {}),
+            'engagement_state': dict(summary.get('engagement_state') or {}),
+        }
+    except Exception:
+        return {'mode': 'off', 'cfg': {}, 'watcher_state': {}, 'engagement_state': {}}
+
+
+@st.fragment(run_every=10)
 def _aqua_live_activity_fragment():
     """Real-time view of what Aqua is doing right now. Refreshes every
-    2 seconds so the countdown to the next auto-send actually ticks
-    down on screen — Joseph's 2026-04-30 ask: 'the OS refresh rate
-    sucks its not showing countdown in live time and im not even sure
-    what its actually doing.'
+    10 seconds (was 2). The visible countdown ticks live every second
+    via the client-side JS ticker — server only needs to refresh the
+    snapshot every 10s to keep mode/counts/last-fire fresh.
 
-    Shows: current mode · scheduled draft count · next-fire countdown ·
-    last engine activity · last inbox check.
+    Heavy DB calls go through cached helpers so multiple fragments
+    share one query per 3-5s instead of each independently hitting
+    Postgres.
     """
-    import aqua as _aqua
-    summary = _aqua.get_status_summary()
+    summary = _cached_aqua_summary()
     mode = summary['mode']
 
-    # Pull pending drafts and find the soonest-firing scheduled one
-    try:
-        pending = database.get_pending_drafts(limit=200) or []
-    except Exception:
-        pending = []
+    # Pull pending drafts (cached) and find the soonest-firing scheduled one
+    pending = _cached_pending_drafts(limit=200)
 
     from datetime import datetime as _dt
     now_utc = _dt.utcnow()
@@ -6305,16 +6390,14 @@ def _show_split_received_replies():
     _inbox_lists_fragment()
 
 
-@st.fragment(run_every=10)
+@st.fragment(run_every=20)
 def _inbox_lists_fragment():
-    """Auto-refreshes every 10s. Re-reads inbound + filters + renders
-    the customer/prospect list, the junk/dismissed bin, and the team
-    section. Lives in its own fragment so new emails surface live."""
-    # Re-read the inbound list so newly-watcher-saved messages appear
-    try:
-        inbound = database.get_all_inbound(limit=200, include_junk=False)
-    except Exception:
-        inbound = []
+    """Auto-refreshes every 20 seconds. Uses cached DB helpers to
+    avoid hammering Postgres. New emails arriving via the watcher
+    (which polls every 1 min) surface within 20s of the watcher
+    save — fast enough for human responsiveness without melting
+    the DB pool."""
+    inbound = _cached_inbound(limit=200, include_junk=False)
     # Split team vs external (same as the page-level read)
     import team as _team
     team_msgs = []
@@ -6361,12 +6444,9 @@ def _inbox_lists_fragment():
         for m in filtered[:30]:
             _render_inbound_card(m, is_team=False)
 
-    # Dismissed messages (junk) — undo if needed
-    try:
-        junk_inbound = [m for m in database.get_all_inbound(limit=100, include_junk=True)
-                        if m['is_junk']]
-    except Exception:
-        junk_inbound = []
+    # Dismissed messages (junk) — undo if needed (cached helper)
+    junk_inbound = [m for m in _cached_inbound(limit=100, include_junk=True)
+                    if m.get('is_junk')]
     if junk_inbound:
         with st.expander(f"🗑 Dismissed as junk ({len(junk_inbound)}) — undo if you change your mind"):
             for m in junk_inbound[:30]:
@@ -6408,14 +6488,14 @@ def _render_inbound_card(msg, is_team=False):
     summary = msg['summary'] or ''
 
     # Look up the soonest-firing scheduled auto-reply draft for this
-    # lead so we can show the AUTO-SENDS countdown ABOVE the expander —
-    # Joseph: 'i shouldnt have to open the email to see the countdown.'
+    # lead so we can show the AUTO-SENDS countdown ABOVE the expander.
+    # Cached lookup — without caching this fired N queries per render.
     secs_until_send = None
     soonest_draft = None
     try:
         from datetime import datetime as _dt
         now_utc = _dt.utcnow()
-        drafts_for_lead = database.get_drafts_for_lead(msg['lead_id'])
+        drafts_for_lead = _cached_drafts_for_lead(msg['lead_id'])
         for d in drafts_for_lead:
             if d.get('sent'):
                 continue
