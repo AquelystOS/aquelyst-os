@@ -5251,13 +5251,34 @@ def _show_engagement_panel():
     """)
 
     if running:
+        # SMTP pre-flight: in AUTO-SEND mode, drafts pile up unsent if the
+        # logged-in user has no SMTP. Surface that explicitly so the user
+        # doesn't stare at "192 drafted, 0 sent" and wonder what's broken.
+        is_auto_send = bool(config.get('auto_send', False))
+        smtp_ok = smtp_sender.is_configured()
+        drafted = stats.get('initial_emails_drafted', 0)
+        sent = stats.get('initial_emails_sent', 0)
+        if is_auto_send and not smtp_ok:
+            st.error(
+                "🚨 **Auto-send is ON but your email isn't connected.** "
+                "Aqua is generating drafts but every send is being blocked. "
+                "Go to **Setup → 📧 Email** and connect your account, then come back."
+            )
+        elif is_auto_send and drafted >= 5 and sent == 0:
+            st.warning(
+                f"⚠️ **{drafted} drafts created, 0 sent.** Likely your SMTP "
+                "auth is failing on every attempt. Hit **Setup → 📧 Email** → "
+                "**'Send a test email to myself'** to confirm the path is "
+                "working before letting Aqua continue."
+            )
+
         st.success(f"🟢 **Auto-engagement is RUNNING** · "
-                    f"Mode: **{config.get('auto_send', False) and 'AUTO-SEND' or 'DRAFT-ONLY'}** · "
+                    f"Mode: **{is_auto_send and 'AUTO-SEND' or 'DRAFT-ONLY'}** · "
                     f"Min score: **{config.get('min_score', 70)}**")
 
         cols = st.columns(4)
-        cols[0].metric("Initial drafts", stats.get('initial_emails_drafted', 0))
-        cols[1].metric("Initial sent", stats.get('initial_emails_sent', 0))
+        cols[0].metric("Initial drafts", drafted)
+        cols[1].metric("Initial sent", sent)
         cols[2].metric("Followups drafted", stats.get('followups_drafted', 0))
         cols[3].metric("Followups sent", stats.get('followups_sent', 0))
 

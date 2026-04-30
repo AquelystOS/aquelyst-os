@@ -439,12 +439,22 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
     if not from_email:
         return None
 
-    # Mark processed up front so we never re-handle this message
+    # We DELIBERATELY do NOT mark this message processed yet. Earlier
+    # versions did that up front, but if classification then raised, the
+    # message ID was already in the dedup list — silently dropped on the
+    # floor with no retry. Now we mark processed only after we've made a
+    # real decision (skip / classified / saved). See _mark_processed()
+    # call sites below.
     rfc_msg_id = msg.get('message_id', '')
-    if rfc_msg_id:
-        processed = _load_processed_ids(watcher_user)
-        processed.add(rfc_msg_id)
-        _save_processed_ids(processed, watcher_user)
+
+    def _mark_processed():
+        if rfc_msg_id:
+            try:
+                processed = _load_processed_ids(watcher_user)
+                processed.add(rfc_msg_id)
+                _save_processed_ids(processed, watcher_user)
+            except Exception:
+                pass
 
     # Always log that we saw this email (responder log + audit log)
     log_event('seen',
@@ -477,6 +487,7 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
         if pat in from_email.lower():
             log_event('skipped', f"Skipped system/auto-sender: {from_email}")
             increment_stat('skipped_autosender')
+            _mark_processed()
             return None
 
     # === Detect team-to-team emails BUT STILL PROCESS THEM ===
@@ -528,10 +539,13 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
             else:
                 log_event('skipped',
                            f"Couldn't create lead for {lookup_email} (already exists?)")
+                _mark_processed()
                 return None
         except Exception as e:
             log_event('error',
                        f"Failed to auto-create lead for {lookup_email}: {str(e)[:80]}")
+            # Don't mark processed — let the next cycle retry; this might
+            # be a transient DB issue.
             return None
 
     # Strip our own CAN-SPAM footer from the body before classifying — the
@@ -549,8 +563,17 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
             body_for_classification = body_for_classification[:idx]
             break
 
-    # Classify intent
-    classification = nepq_engine.classify_inbound_intent(body_for_classification)
+    # Classify intent. If the LLM call blows up, leave the message
+    # UNMARKED so the next cycle retries it instead of silently
+    # dropping it on the floor (which is what the original code did).
+    try:
+        classification = nepq_engine.classify_inbound_intent(body_for_classification)
+    except Exception as e:
+        log_event('error',
+                   f"classify_inbound_intent failed for {from_email}: {str(e)[:120]} — "
+                   f"will retry next cycle.")
+        increment_stat('errors')
+        return None
     intent = classification.get('intent', 'other')
     suggested_status = classification.get('suggested_lead_status', 'researched')
     should_auto_reply = classification.get('should_auto_reply', True)
@@ -615,6 +638,7 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                        f"footer back). No action taken.")
         elif lead['email']:
             database.add_to_suppression(lead['email'], 'reply_unsubscribe')
+        _mark_processed()
         return None
 
     # === ESCALATION ===
@@ -676,9 +700,11 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                    details={'lead_id': lead['id'], 'intent': intent,
                             'sentiment': sentiment, 'reason': escalation_reason})
         increment_stat('escalations')
+        _mark_processed()
         return draft_id
 
     if not should_auto_reply:
+        _mark_processed()
         return None
 
     # Generate NEPQ reply
@@ -735,6 +761,7 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                        f"Failed to send auto-reply to {lead['business_name']}: {send_msg}")
             increment_stat('errors')
 
+    _mark_processed()
     return draft_id
 
 

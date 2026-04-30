@@ -113,8 +113,11 @@ def find_engagement_candidates(min_score, cooldown_minutes=10):
     teammates' Aquas can't blindly double-contact the same prospect.
     Default 10 min — enough buffer that human-sent + auto-engagement
     don't pile on the same inbox."""
-    from datetime import datetime, timedelta
-    cutoff = datetime.utcnow() - timedelta(minutes=cooldown_minutes)
+    from datetime import datetime, timedelta, timezone
+    # Use timezone-aware UTC throughout — comparing aware-vs-naive datetimes
+    # raises TypeError, which the prior code swallowed with a bare `pass`,
+    # silently bypassing the cooldown. Every datetime here is now aware.
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=cooldown_minutes)
     leads = database.get_all_leads()
     candidates = []
     for l in leads:
@@ -128,17 +131,41 @@ def find_engagement_candidates(min_score, cooldown_minutes=10):
             continue
         if database.is_suppressed(l['email']):
             continue
+        # Already have a pending autopilot draft (sent=False) for this lead?
+        # If yes, skip — otherwise the engager creates a duplicate draft on
+        # every cycle while we're outside business hours, piling up clones
+        # in the queue. drain_pending_auto_drafts will ship the existing
+        # one when the window opens.
+        try:
+            existing = database.get_drafts_for_lead(l['id'])
+            has_pending_auto = any(
+                (not d.get('sent'))
+                and (d.get('message_type') or '').startswith(
+                    ('nepq_initial', 'nepq_followup_', 'aqua_intro'))
+                for d in existing
+            )
+            if has_pending_auto:
+                continue
+        except Exception:
+            pass
         # Cooldown: skip if anyone touched this lead recently
         last = l.get('last_contacted')
         if last:
             try:
                 last_dt = datetime.fromisoformat(str(last).replace('Z', '+00:00'))
-                if last_dt.tzinfo is not None:
-                    last_dt = last_dt.replace(tzinfo=None)
+                if last_dt.tzinfo is None:
+                    # Treat naive timestamps as UTC (the DB writes UTC ISO).
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
                 if last_dt > cutoff:
                     continue  # touched too recently — let it breathe
-            except Exception:
-                pass
+            except Exception as e:
+                # Don't swallow silently — log so a parsing bug doesn't
+                # invisibly bypass the cooldown. Conservative: skip the
+                # lead so we don't risk double-touching.
+                log_event('warn',
+                           f"cooldown parse failed for {l.get('email')}: "
+                           f"{str(e)[:80]} — skipping conservatively")
+                continue
         candidates.append(l)
     candidates.sort(key=lambda x: -(x['lead_score'] or 0))
     return candidates
@@ -169,11 +196,17 @@ def find_followup_candidates():
             continue
         # Did the prospect ever reply? If yes, never auto-send a cold
         # follow-up on top — that's a critical respect-the-thread rule.
+        # If the check itself fails, SKIP the lead conservatively rather
+        # than continuing — better to miss a follow-up than to step on
+        # someone's reply.
         try:
             if database.has_inbound_messages(l['id']):
                 continue
-        except Exception:
-            pass
+        except Exception as e:
+            log_event('warn',
+                       f"has_inbound_messages failed for lead {l['id']}: "
+                       f"{str(e)[:80]} — skipping conservatively")
+            continue
         # Already have an unreviewed draft from the last 24 hr? Don't
         # pile a 2nd one on the human review queue.
         try:
@@ -595,6 +628,21 @@ def start_engagement(min_score=70, auto_send=False, check_interval_minutes=15,
     """Start the auto-engagement bot in background."""
     if get_state().get('running'):
         return False, "Already running"
+
+    # Pre-flight: if auto_send is on, bail early when no SMTP is connected.
+    # Otherwise the loop will generate drafts but every send will fail and
+    # the stat counters won't budge — which is exactly the "192 drafted,
+    # 0 sent" mystery. Block at start so the user fixes setup first.
+    if auto_send:
+        try:
+            import smtp_sender
+            if not smtp_sender.is_configured():
+                return False, ("📭 Auto-send needs email connected. Go to "
+                               "Setup → 📧 Email and link your account first, "
+                               "then come back. (Or start in Draft-only mode "
+                               "and review before sending.)")
+        except Exception:
+            pass  # don't let an import error block startup
 
     update_state(
         running=True,

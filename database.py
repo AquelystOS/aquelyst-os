@@ -3,10 +3,44 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
+import sys
 
 import db_backend  # universal SQLite/Postgres backend
 
 DB_PATH = "aquelyst_hunter.db"
+
+
+def _safe_add_column(cursor, table, col, col_def):
+    """Idempotent ALTER TABLE ADD COLUMN.
+
+    Distinguishes the expected 'column already exists' case (which we
+    swallow silently — the migration has already run) from real failures
+    (permission denied, disk full, syntax error). Real failures get
+    logged to stderr so a broken migration doesn't silently leave the
+    schema half-applied — which is what caused KeyError crashes when
+    code expected an attribution column that never got added.
+    """
+    try:
+        cursor.execute(f'ALTER TABLE {table} ADD COLUMN {col} {col_def}')
+    except Exception as e:
+        msg = str(e).lower()
+        if ('already exists' in msg
+                or 'duplicate column' in msg
+                or 'duplicate_column' in msg):
+            # Expected — column was added on a prior boot. Postgres aborts
+            # the transaction on this error, so roll back to clear state.
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
+            return
+        # Anything else is a real schema problem. Log loudly.
+        try:
+            cursor.connection.rollback()
+        except Exception:
+            pass
+        print(f"⚠️  Schema migration FAILED: ALTER TABLE {table} "
+              f"ADD COLUMN {col} {col_def} — {e}", file=sys.stderr)
 
 STATUSES = [
     "new",
@@ -132,10 +166,7 @@ def init_db():
     # Best-effort schema upgrade for older DBs that pre-date is_junk
     for col_name, col_def in [('is_junk', 'INTEGER DEFAULT 0'),
                                 ('junk_reason', 'TEXT')]:
-        try:
-            c.execute(f'ALTER TABLE inbound_messages ADD COLUMN {col_name} {col_def}')
-        except Exception:
-            pass
+        _safe_add_column(c, 'inbound_messages', col_name, col_def)
 
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_inbound_received ON inbound_messages(received_at DESC)')
@@ -273,11 +304,8 @@ def init_db():
     )''')
     # Best-effort schema upgrade for older databases that don't have the new columns
     for col in ('last_used_at', 'total_requests', 'ok_requests', 'err_requests'):
-        try:
-            c.execute(f'ALTER TABLE provider_connection_log ADD COLUMN {col} '
-                      f'{"INTEGER DEFAULT 0" if col != "last_used_at" else "TEXT"}')
-        except Exception:
-            pass  # column already exists
+        col_def = 'INTEGER DEFAULT 0' if col != 'last_used_at' else 'TEXT'
+        _safe_add_column(c, 'provider_connection_log', col, col_def)
 
     # Per-user attribution columns (added 2026-04-28 — multi-tenancy audit).
     # Each row gets stamped with the team member who created/sent it so two
@@ -291,10 +319,7 @@ def init_db():
         ('activities',      'created_by'),
         ('inbound_messages','assigned_to'),
     ):
-        try:
-            c.execute(f'ALTER TABLE {table} ADD COLUMN {col} TEXT')
-        except Exception:
-            pass
+        _safe_add_column(c, table, col, 'TEXT')
 
     conn.commit()
     conn.close()
@@ -2050,11 +2075,43 @@ def delete_lead(lead_id):
         biz_name = f"Lead #{lead_id}"
         email = None
 
-    c.execute('DELETE FROM outreach_drafts WHERE lead_id = ?', (lead_id,))
-    c.execute('DELETE FROM follow_ups WHERE lead_id = ?', (lead_id,))
-    c.execute('DELETE FROM leads WHERE id = ?', (lead_id,))
-    conn.commit()
-    conn.close()
+    # Detach FK references in dependency order. Postgres enforces FKs
+    # strictly (SQLite ignores them by default), so the order matters:
+    #   1. NULL out inbound_messages.draft_response_id (FK → outreach_drafts)
+    #   2. Delete inbound_messages for this lead (FK → leads)
+    #   3. Delete email_tracking_events for any drafts of this lead
+    #   4. Delete activities for this lead (FK → leads)
+    #   5. Delete outreach_drafts (FK → leads)
+    #   6. Delete follow_ups (FK → leads)
+    #   7. Delete the lead itself
+    try:
+        try:
+            c.execute('UPDATE inbound_messages SET draft_response_id = NULL '
+                      'WHERE draft_response_id IN '
+                      '(SELECT id FROM outreach_drafts WHERE lead_id = ?)',
+                      (lead_id,))
+        except Exception:
+            pass
+        try:
+            c.execute('DELETE FROM email_tracking_events WHERE draft_id IN '
+                      '(SELECT id FROM outreach_drafts WHERE lead_id = ?)',
+                      (lead_id,))
+        except Exception:
+            pass
+        try:
+            c.execute('DELETE FROM inbound_messages WHERE lead_id = ?', (lead_id,))
+        except Exception:
+            pass
+        try:
+            c.execute('DELETE FROM activities WHERE lead_id = ?', (lead_id,))
+        except Exception:
+            pass
+        c.execute('DELETE FROM outreach_drafts WHERE lead_id = ?', (lead_id,))
+        c.execute('DELETE FROM follow_ups WHERE lead_id = ?', (lead_id,))
+        c.execute('DELETE FROM leads WHERE id = ?', (lead_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
     try:
         import audit_log
