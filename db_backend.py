@@ -163,11 +163,29 @@ class _PgCursor:
         return self
 
     def fetchall(self):
-        rows = self._cursor.fetchall() or []
+        # Tolerate dead connection: same self-heal as cursor() — Supabase
+        # pooler can close the underlying socket between execute() and
+        # fetchall() (often during cold starts), which used to crash
+        # boot in get_all_leads(). Return [] on InterfaceError /
+        # OperationalError so the caller sees an empty result instead
+        # of a traceback. Real errors still surface.
+        try:
+            rows = self._cursor.fetchall() or []
+        except Exception as e:
+            cls_name = type(e).__name__
+            if cls_name in ('InterfaceError', 'OperationalError'):
+                return []
+            raise
         return [_PgRowDict(r) if isinstance(r, dict) else _PgRowDict(dict(r)) for r in rows]
 
     def fetchone(self):
-        row = self._cursor.fetchone()
+        try:
+            row = self._cursor.fetchone()
+        except Exception as e:
+            cls_name = type(e).__name__
+            if cls_name in ('InterfaceError', 'OperationalError'):
+                return None
+            raise
         if row is None:
             return None
         if isinstance(row, dict):

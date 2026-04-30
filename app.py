@@ -5262,6 +5262,36 @@ def _show_aqua_config_sections():
             sc3.metric("Followups drafted", stats.get('followups_drafted', 0))
             sc4.metric("Followups sent", stats.get('followups_sent', 0))
 
+    # --- CRM HYGIENE -------------------------------------------------------
+    with st.expander(
+        "🧹 CRM hygiene — dedupe leads + show capability stats",
+        expanded=False,
+    ):
+        st.caption(
+            "Older OSM-discovered leads were sometimes added multiple "
+            "times because dedup was domain-only and OSM leads often "
+            "have no website. The dedup logic now also matches by "
+            "normalized business name. Use this button to collapse "
+            "any duplicates already sitting in the CRM."
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔍 Preview dupes (dry run)",
+                          key="aqua_dedupe_preview",
+                          use_container_width=True):
+                k, d, m = autopilot.dedupe_existing_leads(dry_run=True)
+                st.info(f"Would keep {k} unique leads, delete {d} dupes, "
+                        f"merge {m} email field(s) into keepers.")
+        with col_b:
+            if st.button("🧹 Run dedupe now (irreversible)",
+                          key="aqua_dedupe_run",
+                          use_container_width=True,
+                          type="primary"):
+                with st.spinner("Cleaning up..."):
+                    k, d, m = autopilot.dedupe_existing_leads(dry_run=False)
+                st.success(f"Kept {k} unique · deleted {d} dupes · "
+                           f"merged {m} email(s) into keepers.")
+
     # --- AUTO-SEND TIMER ---------------------------------------------------
     with st.expander(
         f"⏱ Auto-send timer · {cfg['send_delay_min_sec']}–{cfg['send_delay_max_sec']}s natural delay",

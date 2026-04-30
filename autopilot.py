@@ -177,27 +177,168 @@ def clear_log():
 # ============================================================================
 # The actual autopilot worker
 # ============================================================================
-def is_already_in_crm(website_url):
-    """Check if we've already added this business to the CRM."""
-    if not website_url:
-        return False
-    domain = email_finder.get_domain_from_website(website_url)
-    if not domain:
-        return False
+def dedupe_existing_leads(dry_run=False):
+    """One-shot cleanup: collapse duplicate leads created before the
+    name-based dedup fix. Two leads are 'the same' if they share a
+    normalized name + (when both have one) city/state.
+
+    Keeps the OLDEST record (lowest id) and merges info from duplicates
+    into it (e.g. if any duplicate has an email and the keeper doesn't,
+    copy the email over). Then deletes the duplicates via
+    database.delete_lead so child rows (drafts, activities, inbound)
+    are detached cleanly.
+
+    Returns (kept_count, deleted_count, merged_email_count).
+    """
     leads = database.get_all_leads()
+    by_key = {}
     for l in leads:
-        lead_domain = email_finder.get_domain_from_website(l['website']) if l['website'] else None
-        if lead_domain == domain:
-            return True
+        name = l['business_name'] or ''
+        if not name:
+            continue
+        norm = _normalize_business_name(name)
+        if not norm:
+            continue
+        # City/state included only when BOTH the candidate and prior
+        # have them — same logic as is_already_in_crm to avoid
+        # collapsing different-city same-name businesses.
+        key = (norm, (l['city'] or '').lower(), (l['state'] or '').lower())
+        by_key.setdefault(key, []).append(l)
+
+    kept_count = 0
+    deleted_count = 0
+    merged_emails = 0
+    for key, group in by_key.items():
+        if len(group) < 2:
+            kept_count += 1
+            continue
+        # Sort: oldest id first → that's the keeper
+        group.sort(key=lambda l: l['id'])
+        keeper = group[0]
+        kept_count += 1
+
+        # Best-effort merge: pull email/phone/website from any dup if
+        # keeper is missing them
+        updates = {}
+        for dup in group[1:]:
+            if not keeper['email'] and dup['email']:
+                updates['email'] = dup['email']
+                merged_emails += 1
+            if not keeper['phone'] and dup['phone']:
+                updates['phone'] = dup['phone']
+            if not keeper['website'] and dup['website']:
+                updates['website'] = dup['website']
+        if updates and not dry_run:
+            try:
+                database.update_lead(keeper['id'], **updates)
+            except Exception:
+                pass
+
+        # Now delete the dupes
+        for dup in group[1:]:
+            if not dry_run:
+                try:
+                    database.delete_lead(dup['id'])
+                except Exception:
+                    continue
+            deleted_count += 1
+
+    return kept_count, deleted_count, merged_emails
+
+
+def is_already_in_crm(website_url, business_name=None, city=None, state=None):
+    """Check if we've already added this business to the CRM.
+
+    Joseph's 2026-04-30 testing: Canterbury Park (a Minnesota racetrack)
+    kept getting re-added every cycle because the dedup was domain-only,
+    and OSM-discovered leads frequently have NO website. The
+    domain-based check returned False instantly for them, letting
+    duplicates back in.
+
+    Now layered: (1) match by website domain when one exists; (2)
+    fallback match by normalized business name (case-insensitive,
+    punctuation-stripped) optionally tightened by city/state for
+    common-name collisions.
+    """
+    leads = database.get_all_leads()
+
+    # Layer 1: domain match (kept — strongest signal when both sides
+    # have a real website)
+    if website_url:
+        domain = email_finder.get_domain_from_website(website_url)
+        if domain and domain not in ('openstreetmap.org',
+                                     'osm.org', 'maps.google.com',
+                                     'google.com'):
+            for l in leads:
+                if not l['website']:
+                    continue
+                lead_domain = email_finder.get_domain_from_website(l['website'])
+                if lead_domain and lead_domain == domain:
+                    return True
+
+    # Layer 2: normalized name match (works when website is None or
+    # is a synthetic OSM URL like https://www.openstreetmap.org/node/123).
+    if business_name:
+        norm_target = _normalize_business_name(business_name)
+        if norm_target:
+            for l in leads:
+                if not l['business_name']:
+                    continue
+                if _normalize_business_name(l['business_name']) != norm_target:
+                    continue
+                # Same name — confirm with city/state if we have them.
+                # Skip the city/state check if the candidate didn't
+                # provide them (early discovery often hasn't enriched yet).
+                if city and l['city'] and city.lower() != (l['city'] or '').lower():
+                    continue
+                if state and l['state'] and state.lower() != (l['state'] or '').lower():
+                    continue
+                return True
+
     return False
+
+
+def _normalize_business_name(name):
+    """Strip punctuation, lowercase, collapse whitespace, drop common
+    business suffixes (LLC, Inc, etc.) so 'Canterbury Park' and
+    'Canterbury Park, LLC' compare equal."""
+    if not name:
+        return ''
+    import re as _re
+    s = name.lower().strip()
+    # Drop common legal/business suffixes
+    suffixes = (' llc', ' inc', ' inc.', ' ltd', ' ltd.', ' corp',
+                ' corp.', ' co', ' co.', ' company', ' farm', ' farms',
+                ' stables', ' stable', ' ranch', ' park', ' center',
+                ' centre', ' the')
+    # Iterate a couple times in case multiple suffixes stack
+    for _ in range(3):
+        for suf in suffixes:
+            if s.endswith(suf):
+                s = s[:-len(suf)].strip()
+                break
+        else:
+            break
+    # Strip punctuation, collapse whitespace
+    s = _re.sub(r"[^\w\s]", "", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def process_candidate(candidate, config):
     """Process a single discovered candidate end-to-end."""
     website = candidate['url']
 
-    # Skip if already in CRM
-    if is_already_in_crm(website):
+    # Skip if already in CRM. Pass the candidate's name + city/state
+    # so the no-website OSM dedup path can match by normalized name —
+    # without this, Canterbury Park (no website in OSM) was being
+    # re-added every cycle.
+    if is_already_in_crm(
+        website,
+        business_name=candidate.get('title') or candidate.get('name'),
+        city=candidate.get('city'),
+        state=candidate.get('state'),
+    ):
         log_event("skipped", f"Already in CRM: {candidate['title']}")
         increment_stat('skipped')
         return None
@@ -437,6 +578,27 @@ def run_autopilot(config):
 
     seen_urls = set()
 
+    # Per-category cooldown — once a category has been searched in the
+    # current run, skip it for HOURS so equine categories that all hit
+    # the same OSM dataset don't churn the same Canterbury Park-style
+    # leads on every cycle. Persisted to state so it survives restarts.
+    from datetime import datetime as _dt, timedelta as _td
+    _CATEGORY_COOLDOWN_HOURS = 6
+    cooldowns = get_state().get('category_cooldowns', {}) or {}
+    now_iso = _dt.utcnow().isoformat()
+
+    def _on_cooldown(cat):
+        last = cooldowns.get(cat)
+        if not last:
+            return False
+        try:
+            last_dt = _dt.fromisoformat(str(last).replace('Z', '+00:00'))
+            if last_dt.tzinfo is not None:
+                last_dt = last_dt.replace(tzinfo=None)
+        except Exception:
+            return False
+        return (_dt.utcnow() - last_dt) < _td(hours=_CATEGORY_COOLDOWN_HOURS)
+
     try:
         for biz_type in business_types:
             # Check if user stopped us
@@ -449,6 +611,13 @@ def run_autopilot(config):
             if current_added >= target_total:
                 log_event("system", f"🎯 Target reached: {current_added} leads added!")
                 break
+
+            # Per-category cooldown
+            if _on_cooldown(biz_type):
+                log_event("discovery",
+                          f"⏭ Skipping {biz_type} — searched recently "
+                          f"(cooldown {_CATEGORY_COOLDOWN_HOURS}h)")
+                continue
 
             update_state(current_action="discovering", current_target=biz_type)
             log_event("discovery", f"🔎 Searching the web for: {biz_type}" +
@@ -468,6 +637,11 @@ def run_autopilot(config):
                 continue
 
             log_event("discovery", f"   ✓ {len(candidates)} unique candidates from {len(set(c.get('source', '') for c in candidates))} sources")
+
+            # Mark this category as recently-searched so we don't repeat
+            # it on the next cycle (until the cooldown expires).
+            cooldowns[biz_type] = now_iso
+            update_state(category_cooldowns=cooldowns)
 
             new_candidates = [c for c in candidates if c['url'] not in seen_urls]
             for c in new_candidates:
