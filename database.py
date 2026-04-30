@@ -2206,6 +2206,32 @@ def cancel_scheduled_send(draft_id):
         conn.close()
 
 
+def clear_all_scheduled_sends():
+    """Clear scheduled_send_at on EVERY pending draft. Used when Aqua
+    flips to OFF — countdowns should not be lying about future sends
+    that aren't going to happen because the drain loop is stopped.
+    Drafts themselves stay (sent=0); they become ordinary pending
+    drafts the user can manually approve. Toggling back to AUTONOMOUS
+    triggers the backfill which re-queues them with fresh timers.
+
+    Returns the number of drafts whose timers were cleared.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    cleared = 0
+    try:
+        c.execute('UPDATE outreach_drafts SET scheduled_send_at = NULL '
+                  'WHERE sent = 0 AND scheduled_send_at IS NOT NULL')
+        try:
+            cleared = c.rowcount or 0
+        except Exception:
+            cleared = 0
+        conn.commit()
+    finally:
+        conn.close()
+    return cleared
+
+
 def get_unanswered_inbound(limit=50):
     """Catch-up scanner: every inbound message that doesn't have an
     outbound reply newer than itself. Lets Aqua spot prospects waiting

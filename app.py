@@ -3695,6 +3695,7 @@ def _inbox_status_fragment():
     15 seconds. Uses cached DB helpers so refreshes don't hammer
     Postgres — multiple fragments share a single query per 3-5s
     cache window."""
+    import aqua as _aqua  # local import: fragment runs in isolated scope
     sent = _cached_sent_drafts(limit=500)
     pending = _cached_pending_drafts(limit=500)
     summary = _cached_aqua_summary()
@@ -5323,6 +5324,34 @@ def _aqua_live_activity_fragment():
         )
     with cols[1]:
         scheduled_color = '#a3e635' if scheduled_count > 0 else '#475569'
+        # Compute drain-time so the user knows how long the FIFO queue
+        # takes to clear. The latest scheduled draft is the tail of
+        # the queue; its scheduled_send_at minus now = total queue
+        # length. With 1-min FIFO spacing, a 200-deep queue = 200 min.
+        latest_secs = 0
+        try:
+            for d in pending:
+                sched = d.get('scheduled_send_at')
+                if not sched:
+                    continue
+                from datetime import datetime as _dt2
+                sched_dt2 = _dt2.fromisoformat(str(sched).replace('Z', '+00:00'))
+                if sched_dt2.tzinfo is not None:
+                    sched_dt2 = sched_dt2.replace(tzinfo=None)
+                secs2 = int((sched_dt2 - now_utc).total_seconds())
+                if secs2 > latest_secs:
+                    latest_secs = secs2
+        except Exception:
+            pass
+        if latest_secs > 0:
+            drain_h = latest_secs // 3600
+            drain_m = (latest_secs % 3600) // 60
+            if drain_h > 0:
+                drain_label = f"clears in {drain_h}h {drain_m}m"
+            else:
+                drain_label = f"clears in {drain_m}m"
+        else:
+            drain_label = "queue empty"
         st.html(
             f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.20);"
             f"border-radius:12px;padding:0.7rem 0.9rem;text-align:center'>"
@@ -5330,7 +5359,8 @@ def _aqua_live_activity_fragment():
             f"letter-spacing:0.08em;font-weight:700'>SCHEDULED</div>"
             f"<div style='font-size:1.4rem;font-weight:800;color:{scheduled_color};"
             f"margin-top:0.1rem;line-height:1'>{scheduled_count}</div>"
-            f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>auto-sends queued</div></div>"
+            f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>"
+            f"queued · {drain_label}</div></div>"
         )
     with cols[2]:
         if soonest_secs is not None:
@@ -6521,31 +6551,37 @@ def _render_inbound_card(msg, is_team=False):
 
     # Look up the soonest-firing scheduled auto-reply draft for this
     # lead so we can show the AUTO-SENDS countdown ABOVE the expander.
-    # Cached lookup — without caching this fired N queries per render.
+    # If Aqua is OFF the countdown banner is suppressed entirely —
+    # otherwise it'd be lying about a send that won't happen.
     secs_until_send = None
     soonest_draft = None
     try:
-        from datetime import datetime as _dt
-        now_utc = _dt.utcnow()
-        drafts_for_lead = _cached_drafts_for_lead(msg['lead_id'])
-        for d in drafts_for_lead:
-            if d.get('sent'):
-                continue
-            sched = d.get('scheduled_send_at')
-            if not sched:
-                continue
-            try:
-                sched_dt = _dt.fromisoformat(str(sched).replace('Z', '+00:00'))
-                if sched_dt.tzinfo is not None:
-                    sched_dt = sched_dt.replace(tzinfo=None)
-                secs = int((sched_dt - now_utc).total_seconds())
-                if secs > 0 and (secs_until_send is None or secs < secs_until_send):
-                    secs_until_send = secs
-                    soonest_draft = d
-            except Exception:
-                continue
+        _aqua_mode = _cached_aqua_summary().get('mode', 'off')
     except Exception:
-        pass
+        _aqua_mode = 'off'
+    if _aqua_mode != 'off':
+        try:
+            from datetime import datetime as _dt
+            now_utc = _dt.utcnow()
+            drafts_for_lead = _cached_drafts_for_lead(msg['lead_id'])
+            for d in drafts_for_lead:
+                if d.get('sent'):
+                    continue
+                sched = d.get('scheduled_send_at')
+                if not sched:
+                    continue
+                try:
+                    sched_dt = _dt.fromisoformat(str(sched).replace('Z', '+00:00'))
+                    if sched_dt.tzinfo is not None:
+                        sched_dt = sched_dt.replace(tzinfo=None)
+                    secs = int((sched_dt - now_utc).total_seconds())
+                    if secs > 0 and (secs_until_send is None or secs < secs_until_send):
+                        secs_until_send = secs
+                        soonest_draft = d
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     intent_color = {
         'interested': '#16a34a', 'question': '#0ea5e9', 'objection': '#f59e0b',

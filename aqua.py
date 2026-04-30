@@ -126,6 +126,18 @@ def set_mode(mode):
             auto_engagement.stop_engagement()
         except Exception:
             pass
+        # Clear all pending scheduled timers — when Aqua is OFF, the
+        # drain isn't running, so countdowns are lying about future
+        # sends that won't happen. Drafts stay; just the timer goes.
+        # Toggling back to AUTONOMOUS triggers backfill which restages
+        # them with fresh timers.
+        try:
+            import database as _db
+            n = _db.clear_all_scheduled_sends()
+            if n:
+                return True, f"Aqua is OFF — {n} timer(s) cleared. Drafts remain pending."
+        except Exception:
+            pass
         return True, "Aqua is OFF — nothing automated."
 
     auto_send = (mode == 'autonomous')
@@ -152,6 +164,21 @@ def set_mode(mode):
             )
     except Exception as e:
         return False, f"Watcher failed to start: {str(e)[:120]}"
+
+    # When flipping to AUTONOMOUS, ALWAYS run the FIFO backfill so
+    # pending drafts get fresh 1-min/2-min/3-min countdowns starting
+    # from now. set_auto_reply_mode triggers backfill internally,
+    # but start_responder does not — calling it here unconditionally
+    # covers both paths. Joseph's rule (2026-04-30): "the proper
+    # order of emails for aqua to send out should be in the order in
+    # which recieved that should have a one minute countdown when
+    # aqua is on the second would have a two minute countdown and
+    # so on."
+    if auto_send:
+        try:
+            email_responder._backfill_schedule_unscheduled_auto_replies()
+        except Exception:
+            pass
 
     # Auto-engagement: start (or restart so config applies). Stop+start
     # is the simplest way to push new config into the running loop.
