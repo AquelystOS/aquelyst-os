@@ -113,21 +113,32 @@ def save_smtp_config(provider, email, app_password, sender_name=""):
         pass
 
 
-def load_smtp_config():
-    """Load SMTP config for the CURRENTLY LOGGED-IN user.
+def load_smtp_config(user_email=None):
+    """Load SMTP config for a specific user (or the currently logged-in
+    user if none is given).
+
+    `user_email` parameter exists so background threads (drain loop,
+    catch-up scanner, auto-engagement worker) can specify WHO they're
+    sending as without depending on Streamlit session_state — which
+    those threads don't have. Joseph caught this on 2026-04-30:
+    autonomous sends were silently failing because background drain
+    couldn't find a session user, fell back to the legacy file (which
+    didn't exist), and send_email returned False without making it
+    visible in the UI.
 
     If a user is logged in but has no SMTP saved, returns None — does NOT
     silently fall back to anyone else's smtp_config.json. That fallback
     was the root cause of Danielle's emails sending FROM Joseph's address.
 
-    The legacy global file is only used when nobody is logged in (dev mode
-    / background context with no session_state)."""
-    user_email = _current_user_email()
-    if user_email:
-        # Logged-in user: their own config or NOTHING. No silent leak to others.
+    The legacy global file is only used when nobody is logged in AND no
+    explicit user_email is provided (dev mode)."""
+    target_user = user_email or _current_user_email()
+    if target_user:
+        # Use the resolved user — could be the explicit param OR the
+        # session user. Either way, load from per-user DB row or NOTHING.
         try:
             import database
-            cfg = database.smtp_get(user_email)
+            cfg = database.smtp_get(target_user)
             if cfg and cfg.get('smtp_email'):
                 return {
                     'provider': cfg.get('provider', 'gmail'),
@@ -139,7 +150,8 @@ def load_smtp_config():
             pass
         return None
 
-    # Nobody logged in — fall back to the legacy global file (dev / background)
+    # Nobody logged in AND no explicit user — fall back to the legacy
+    # global file (dev / background) only if it exists.
     import base64
     if not Path(CONFIG_FILE).exists():
         return None
@@ -351,7 +363,8 @@ def _build_can_spam_footer(to_email, plain=True):
 
 def send_email(to_email, subject, body, body_html=None, reply_to=None,
                 tracking_pixel_url=None, draft_id=None,
-                in_reply_to=None, references=None):
+                in_reply_to=None, references=None,
+                send_as_user=None):
     """
     Send email via configured SMTP for the CURRENTLY LOGGED-IN user.
     Returns (success, message).
@@ -385,12 +398,15 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
         if not s.endswith('>'):
             s = s + '>'
         return s
-    user_email = _current_user_email()
-    config = load_smtp_config()
+    # Resolve which user to send AS. Explicit send_as_user wins (used
+    # by background drain threads that have no session_state). Falls
+    # back to current logged-in user.
+    target_user = send_as_user or _current_user_email()
+    config = load_smtp_config(user_email=target_user)
     if not config:
-        if user_email:
+        if target_user:
             return False, (
-                f"📭 No email connected for {user_email}. Go to "
+                f"📭 No email connected for {target_user}. Go to "
                 "**Setup → Email** and connect your Gmail (or other provider) "
                 "with an App Password before sending. Aqua won't send as "
                 "anyone else."

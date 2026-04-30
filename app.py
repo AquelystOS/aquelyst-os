@@ -5470,6 +5470,44 @@ def _aqua_live_activity_fragment():
             f"engine {last_run_short}<br>inbox {last_check_short}</div></div>"
         )
 
+    # Recent autonomous sends — proves Aqua is actually firing emails,
+    # not just claiming to. Joseph 2026-04-30: "i should see these in
+    # my sent box of joseph@aquelyst and i see nothing." Show the
+    # most recent 5 auto-sent drafts (last hour) so user can verify.
+    try:
+        from datetime import datetime as _dt3, timedelta as _td3
+        cutoff_iso = (_dt3.utcnow() - _td3(hours=1)).isoformat()
+        recent_sent = [d for d in _cached_sent_drafts(limit=200)
+                       if (d.get('message_type') or '').startswith(
+                           ('nepq_initial', 'nepq_followup_', 'auto_reply_to_',
+                            'aqua_intro', 'ESCALATED_'))]
+        recent_sent.sort(key=lambda d: str(d.get('created_at') or ''), reverse=True)
+        recent_sent = recent_sent[:5]
+    except Exception:
+        recent_sent = []
+
+    if recent_sent:
+        st.html(
+            "<div style='margin-top:0.6rem;font-family:JetBrains Mono,monospace;"
+            "font-size:0.65rem;color:#94a3b8;letter-spacing:0.12em;"
+            "text-transform:uppercase;font-weight:700'>◢ RECENT AUTONOMOUS SENDS</div>"
+        )
+        rows = []
+        for d in recent_sent:
+            biz = (d.get('business_name') or '?')[:30]
+            subj = (d.get('subject') or '')[:50]
+            sent_by = (d.get('sent_by') or '?')
+            ts = (d.get('created_at') or '')[11:19]
+            rows.append(
+                f"<div style='font-size:0.74rem;color:#cbd5e1;padding:0.25rem 0;"
+                f"border-bottom:1px solid rgba(148,163,184,0.10)'>"
+                f"<span style='font-family:JetBrains Mono,monospace;color:#a3e635'>"
+                f"📤 {ts}</span> · <strong>{biz}</strong> · "
+                f"<span style='color:#94a3b8'>{subj}</span> · "
+                f"<span style='color:#64748b'>as {sent_by}</span></div>"
+            )
+        st.html("".join(rows))
+
     # Stat strip
     sent_n = eng_stats.get('initial_emails_sent', 0)
     drafted_n = eng_stats.get('initial_emails_drafted', 0)

@@ -303,10 +303,20 @@ def engage_lead_initial(lead, auto_send=False):
         increment_stat('errors')
         return None
 
+    # Stamp the draft with the engagement starter so the drain has an
+    # explicit user to send AS in background context. Falls back to
+    # the lead's last_contacted_by if the engagement was started
+    # before this field was tracked.
+    started_by = (get_state().get('config', {}) or {}).get('started_by_user_email')
+    creator = started_by or (lead.get('last_contacted_by') if isinstance(lead, dict)
+                              else lead['last_contacted_by'] if 'last_contacted_by' in lead.keys()
+                              else None)
+
     # Save draft
     draft_id = database.add_outreach_draft(
         lead['id'], 'nepq_initial',
-        result['subject'], result['body']
+        result['subject'], result['body'],
+        created_by=creator
     )
 
     # Send-time guardrail — even if auto_send=True, only fire during
@@ -458,9 +468,13 @@ def engage_lead_followup(lead, auto_send=False):
         increment_stat('errors')
         return None
 
+    started_by_fu = (get_state().get('config', {}) or {}).get('started_by_user_email')
+    creator_fu = started_by_fu or (lead.get('last_contacted_by') if isinstance(lead, dict)
+                                    else None)
     draft_id = database.add_outreach_draft(
         lead['id'], f'nepq_followup_{touch_number}',
-        result['subject'], result['body']
+        result['subject'], result['body'],
+        created_by=creator_fu
     )
 
     # Same business-hours guardrail as the initial-engagement path —
@@ -714,6 +728,47 @@ def catch_up_unanswered_threads(max_per_run=5, auto_send=False):
     return drafted, skipped
 
 
+def _resolve_send_as_user(draft, lead):
+    """Figure out which AqueLyst user should be the FROM address for
+    this auto-send. Background threads have no Streamlit session, so
+    the SMTP path needs an explicit user. Resolution chain:
+      1. draft.created_by  (who scheduled this specific draft)
+      2. draft.sent_by     (rare — pre-stamped)
+      3. lead.last_contacted_by  (the human who originally touched the lead)
+      4. engagement.state['config']['started_by_user_email']  (whoever
+         flipped Aqua to AUTONOMOUS — they own the campaign)
+      5. None  (will surface a clear error in send_email)
+    Returns lowercase email or None.
+    """
+    candidates = []
+    try:
+        candidates.append((draft.get('created_by') or '').lower() if draft else '')
+    except Exception:
+        pass
+    try:
+        candidates.append((draft.get('sent_by') or '').lower() if draft else '')
+    except Exception:
+        pass
+    try:
+        if lead:
+            candidates.append((lead.get('last_contacted_by') or '').lower()
+                              if isinstance(lead, dict)
+                              else (lead['last_contacted_by'] or '').lower()
+                              if 'last_contacted_by' in (lead.keys() if hasattr(lead, 'keys') else [])
+                              else '')
+    except Exception:
+        pass
+    try:
+        cfg = (get_state() or {}).get('config', {}) or {}
+        candidates.append((cfg.get('started_by_user_email') or '').lower())
+    except Exception:
+        pass
+    for c in candidates:
+        if c:
+            return c
+    return None
+
+
 def drain_pending_auto_drafts(max_per_run=20):
     """Send any unsent autopilot/auto-engagement drafts that are sitting
     in the queue. Skips human-created drafts (compose, manual_send) — those
@@ -798,28 +853,41 @@ def drain_pending_auto_drafts(max_per_run=20):
                 irt = database.get_latest_inbound_message_id(lead_id)
         except Exception:
             irt = None
+
+        # Resolve which user to send AS — background threads have no
+        # Streamlit session, so smtp_sender needs an explicit user
+        # email or it'll fail silently. Joseph caught this on
+        # 2026-04-30: "i should see these in my sent box of
+        # joseph@aquelyst and i see nothing unless i manually hit send."
+        send_as = _resolve_send_as_user(d, lead)
+
         try:
             success, send_msg = smtp_sender.send_email(
                 lead['email'], d.get('subject') or '',
                 d.get('content') or '', draft_id=d['id'],
-                in_reply_to=irt)
+                in_reply_to=irt,
+                send_as_user=send_as)
         except Exception as e:
             log_event('error', f"Drain send failed for {lead['business_name']}: {str(e)[:80]}")
             continue
         if success:
             database.approve_draft(d['id'])
-            database.mark_draft_sent(d['id'])
+            database.mark_draft_sent(d['id'], sent_by=send_as)
             database.update_lead(lead_id, status='contacted',
                                   last_contacted=datetime.now().isoformat())
             database.log_activity(lead_id, 'auto_drain_sent',
-                                   f"📤 Pending {msg_type} sent: {(d.get('subject') or '')[:50]}")
+                                   f"📤 Pending {msg_type} sent as {send_as or 'unknown'}: "
+                                   f"{(d.get('subject') or '')[:50]}")
             sent_count += 1
             log_event('sent',
-                       f"📤 Drained pending draft → {lead['business_name']}",
-                       details={'lead_id': lead_id, 'draft_id': d['id']})
+                       f"📤 Drained pending draft → {lead['business_name']} "
+                       f"(as {send_as or 'unknown'})",
+                       details={'lead_id': lead_id, 'draft_id': d['id'],
+                                'send_as': send_as})
         else:
             log_event('error',
-                       f"Drain SMTP failed for {lead['business_name']}: {(send_msg or '')[:80]}")
+                       f"Drain SMTP failed for {lead['business_name']} "
+                       f"(send_as={send_as or 'NONE'}): {(send_msg or '')[:120]}")
         time.sleep(1)
     return sent_count, blocked_count
 
@@ -929,8 +997,14 @@ def engagement_loop():
 
 
 def start_engagement(min_score=70, auto_send=False, check_interval_minutes=1,
-                      max_per_run=5, follow_up_enabled=True):
+                      max_per_run=5, follow_up_enabled=True,
+                      started_by_user_email=None):
     """Start the auto-engagement bot in background.
+
+    `started_by_user_email` is captured into config so background drain
+    threads (which have no Streamlit session) can still resolve the
+    correct SMTP credentials when sending. Without this, autonomous
+    sends silently fail because send_email can't find a current user.
 
     Default check_interval is 1 min so the scheduled-send countdown
     timers fire on time. Heavy AI work (find candidates, draft) is
@@ -982,6 +1056,7 @@ def start_engagement(min_score=70, auto_send=False, check_interval_minutes=1,
             'check_interval_minutes': check_interval_minutes,
             'max_per_run': max_per_run,
             'follow_up_enabled': follow_up_enabled,
+            'started_by_user_email': started_by_user_email,
         },
     )
 

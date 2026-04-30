@@ -180,19 +180,36 @@ def set_mode(mode):
         except Exception:
             pass
 
+    # Capture the user who toggled — background threads (drain, catch-up)
+    # will use this as the SMTP send-as identity. Without it the drain
+    # has no way to know whose Gmail to send from. Joseph's 2026-04-30
+    # bug: "i should see these in my sent box of joseph@aquelyst and
+    # i see nothing unless i manually hit send."
+    started_by = None
+    try:
+        import streamlit as _st
+        started_by = (_st.session_state.get('logged_in_user_email') or '').lower() or None
+    except Exception:
+        pass
+
     # Auto-engagement: start (or restart so config applies). Stop+start
     # is the simplest way to push new config into the running loop.
     try:
         if auto_engagement.is_running():
             # Update the config in-place so the next cycle reads new values
-            auto_engagement.update_state(config={
+            existing_cfg = (auto_engagement.get_state() or {}).get('config', {}) or {}
+            new_cfg = {
                 'min_score': cfg['engagement_min_score'],
                 'auto_send': auto_send,
                 'check_interval_minutes': 1,
                 'engagement_interval_minutes': cfg['engagement_heavy_min'],
                 'max_per_run': cfg['engagement_max_per_run'],
                 'follow_up_enabled': cfg['engagement_followups_enabled'],
-            })
+                # Preserve the original starter unless we have a fresh one
+                'started_by_user_email': (started_by
+                                           or existing_cfg.get('started_by_user_email')),
+            }
+            auto_engagement.update_state(config=new_cfg)
         else:
             auto_engagement.start_engagement(
                 min_score=cfg['engagement_min_score'],
@@ -200,6 +217,7 @@ def set_mode(mode):
                 check_interval_minutes=1,
                 max_per_run=cfg['engagement_max_per_run'],
                 follow_up_enabled=cfg['engagement_followups_enabled'],
+                started_by_user_email=started_by,
             )
     except Exception as e:
         return False, f"Engagement failed to start: {str(e)[:120]}"
