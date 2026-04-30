@@ -1266,46 +1266,70 @@ st.markdown("""
 
 
 def _inject_countdown_ticker_once():
-    """Insert a tiny JS ticker (via st.components.v1.html iframe) that
-    decrements every <span data-aqua-cd='SECS'> on the page once per
-    second. Without this the AUTO-SENDS badge would just be a snapshot
-    at render time — Joseph: 'OS refresh rate sucks its not showing
-    countdown in live time.'
+    """No-op kept for backwards compatibility — the cross-origin JS
+    ticker approach didn't work because Streamlit serves component
+    iframes from a different origin than the main app, so
+    window.parent.document is blocked by SOP. Live countdowns now use
+    _render_live_countdown which embeds a self-contained iframe per
+    badge that owns its own DOM and ticks via setInterval inside its
+    own frame."""
+    return
 
-    Idempotent: gated by st.session_state so the iframe is added at
-    most once per Streamlit session. Re-rendered fragment HTML keeps
-    the data-aqua-cd attribute accurate (server-side) while the JS
-    ticks the visible text in between rerenders.
+
+def _render_live_countdown(secs_remaining, prefix='⏱ AUTO-SENDS IN',
+                            zero_text='⏱ FIRING NOW…',
+                            background='linear-gradient(135deg,#06b6d4,#a3e635)',
+                            color='#0a0f1c', height=36, font_size='0.85rem',
+                            font_weight=700, padding='0.4rem 0.85rem',
+                            border_radius='8px', extra_style=''):
+    """Render a self-contained ticking countdown via st.components.v1.html.
+
+    Each call mounts an iframe that owns its DOM and runs setInterval
+    to update the displayed M:SS once per second — no cross-origin
+    parent access needed. Trade-off: each badge is a separate frame
+    (~50-100kb), so don't sprinkle 100 of these on a page.
+
+    Joseph 2026-04-30: 'fucking countdown clocks arent in live time
+    they refresh when the screen refreshes.' This is the fix.
     """
-    if st.session_state.get('_aqua_ticker_injected'):
-        return
-    st.session_state['_aqua_ticker_injected'] = True
     import streamlit.components.v1 as _components
-    _components.html(
-        """
+    secs = max(0, int(secs_remaining or 0))
+    # Sanitize string args that go into the JS literal
+    safe_prefix = (prefix or '').replace("'", "\\'")
+    safe_zero = (zero_text or '').replace("'", "\\'")
+    html = f"""
+<div id="aqua-cd-root" style="background:{background};color:{color};
+     padding:{padding};border-radius:{border_radius};
+     font-size:{font_size};font-weight:{font_weight};
+     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+     line-height:1.2;display:flex;align-items:center;
+     justify-content:center;{extra_style}">
+  <span id="aqua-cd-text">{safe_prefix} {secs // 60}:{secs % 60:02d}</span>
+</div>
 <script>
-(function() {
-  function fmt(s){var m=Math.floor(s/60),sec=s%60;return m+':'+(sec<10?'0':'')+sec;}
-  function tick() {
-    try {
-      var els = window.parent.document.querySelectorAll('[data-aqua-cd]');
-      els.forEach(function(el){
-        var n = parseInt(el.getAttribute('data-aqua-cd'));
-        if (isNaN(n) || n <= 0) return;
-        n -= 1;
-        el.setAttribute('data-aqua-cd', n);
-        el.textContent = fmt(n);
-      });
-    } catch (e) { /* iframe may be sandboxed — fall back silently */ }
-  }
-  if (!window.parent._aquaTicker) {
-    window.parent._aquaTicker = setInterval(tick, 1000);
-  }
-})();
+(function() {{
+  var start = {secs};
+  var startTime = Date.now();
+  var el = document.getElementById('aqua-cd-text');
+  var root = document.getElementById('aqua-cd-root');
+  if (!el) return;
+  function fmt(n){{var m=Math.floor(n/60),s=n%60;return m+':'+(s<10?'0':'')+s;}}
+  function update() {{
+    var elapsed = Math.floor((Date.now() - startTime) / 1000);
+    var remaining = start - elapsed;
+    if (remaining > 0) {{
+      el.textContent = '{safe_prefix} ' + fmt(remaining);
+    }} else {{
+      el.textContent = '{safe_zero}';
+      if (root) root.style.opacity = '0.65';
+      clearInterval(timer);
+    }}
+  }}
+  var timer = setInterval(update, 1000);
+}})();
 </script>
-""",
-        height=0,
-    )
+"""
+    _components.html(html, height=height)
 
 
 # ===========================================================================
@@ -5310,21 +5334,29 @@ def _aqua_live_activity_fragment():
         )
     with cols[2]:
         if soonest_secs is not None:
-            mins = soonest_secs // 60
-            secs = soonest_secs % 60
-            countdown = f"{mins}:{secs:02d}"
             biz = (soonest.get('business_name') or '?')[:22]
+            # Self-contained iframe ticks every second
             st.html(
-                f"<div style='background:linear-gradient(135deg,#06b6d433,#a3e63522);"
-                f"border:1px solid #06b6d4;border-radius:12px;padding:0.7rem 0.9rem;"
-                f"text-align:center'>"
                 f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
-                f"letter-spacing:0.08em;font-weight:700'>NEXT FIRES IN</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#06b6d4;"
-                f"margin-top:0.1rem;font-family:JetBrains Mono,monospace;line-height:1'>"
-                f"{countdown}</div>"
-                f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>"
-                f"→ {biz}</div></div>"
+                f"letter-spacing:0.08em;font-weight:700;text-align:center;"
+                f"margin-bottom:0.15rem'>NEXT FIRES IN</div>"
+            )
+            _render_live_countdown(
+                secs_remaining=soonest_secs,
+                prefix='',
+                zero_text='SENDING…',
+                background='linear-gradient(135deg,#06b6d433,#a3e63522)',
+                color='#06b6d4',
+                height=46,
+                font_size='1.4rem',
+                font_weight=800,
+                padding='0.3rem 0.5rem',
+                border_radius='12px',
+                extra_style='border:1px solid #06b6d4;font-family:JetBrains Mono,monospace;',
+            )
+            st.html(
+                f"<div style='font-size:0.6rem;color:#64748b;text-align:center;"
+                f"margin-top:0.15rem'>→ {biz}</div>"
             )
         else:
             st.html(
@@ -6541,27 +6573,24 @@ def _render_inbound_card(msg, is_team=False):
                 st.toast("✅ Dismissed. Aqua learned the pattern.", icon="🧠")
                 st.rerun()
 
-        # If there's a scheduled auto-reply pending for this lead,
-        # show the live AUTO-SENDS countdown right above the expander
-        # so the user sees it without opening anything. Uses the same
-        # JS-ticker mechanism as the thread-view badges.
+        # Live ticking countdown — self-contained iframe so it actually
+        # updates every second instead of waiting for a fragment refresh.
         if secs_until_send is not None:
-            mins = secs_until_send // 60
-            secs = secs_until_send % 60
-            cd_id = f"cd_inbox_{msg['id']}"
             draft_subj = (soonest_draft.get('subject') or '')[:60] if soonest_draft else ''
-            st.html(
-                f"<div style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
-                f"color:#0a0f1c;padding:0.4rem 0.85rem;border-radius:8px;"
-                f"margin-bottom:0.4rem;font-size:0.85rem;font-weight:700;"
-                f"display:flex;justify-content:space-between;align-items:center;gap:0.7rem'>"
-                f"<span>⏱ Aqua's reply auto-sends in "
-                f"<span id='{cd_id}' data-aqua-cd='{secs_until_send}' "
-                f"style='font-family:JetBrains Mono,monospace'>{mins}:{secs:02d}</span></span>"
-                f"<span style='font-weight:500;font-size:0.78rem;opacity:0.85'>"
-                f"→ {draft_subj}</span>"
-                f"</div>"
+            label = f"⏱ Aqua's reply auto-sends in"
+            zero = f"⏱ Sending now…  → {draft_subj}"
+            _render_live_countdown(
+                secs_remaining=secs_until_send,
+                prefix=label,
+                zero_text=zero,
+                height=42,
+                font_size='0.85rem',
+                padding='0.4rem 0.9rem',
+                extra_style=(f"box-shadow:0 1px 3px rgba(6,182,212,0.25);"
+                              f"margin-bottom:0.3rem"),
             )
+            if draft_subj:
+                st.caption(f"→ {draft_subj}")
 
         # Click to expand the full conversation
         with st.expander(f"📨  **{biz}** · {received}  ·  _{subject[:60]}_"):
@@ -7636,22 +7665,19 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                     "border-radius:8px;font-size:0.7rem;font-weight:700;margin-left:0.5rem'>SENT</span>"
                 )
             elif secs_until_send is not None:
-                mins = secs_until_send // 60
-                secs = secs_until_send % 60
-                # Live-ticking countdown — embeds a tiny <script> that
-                # decrements every second WITHOUT a server roundtrip.
-                # Without this the badge only updated on full page
-                # reload, so Joseph saw "AUTO-SENDS IN 1:49" frozen
-                # on screen.
-                cd_id = f"cd_{msg.get('id', 'x')}"
+                # The thread-view badge sits inline next to the message
+                # type label; the live ticker is rendered SEPARATELY
+                # below the bubble (see after the st.html call) because
+                # an inline iframe inside the markdown bubble doesn't
+                # play well with Streamlit's layout. The static badge
+                # here just signals "scheduled" — the live ticker
+                # below shows the actual countdown.
                 sent_badge = (
                     f"<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                     f"color:#0a0f1c;padding:0.1rem 0.55rem;border-radius:8px;"
                     f"font-size:0.7rem;font-weight:700;margin-left:0.5rem' "
-                    f"title='Auto-sends when the timer hits zero. Hit Send Now to fire it instantly, or Cancel timer to keep it as a draft.'>"
-                    f"⏱ AUTO-SENDS IN <span id='{cd_id}' "
-                    f"data-aqua-cd='{secs_until_send}'>{mins}:{secs:02d}</span>"
-                    f"</span>"
+                    f"title='Live countdown shown below — Auto-sends when the timer hits zero.'>"
+                    f"⏱ SCHEDULED</span>"
                 )
             else:
                 sent_badge = (
@@ -7681,6 +7707,20 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                 f"</div>"
                 f"</div></div>"
             )
+
+            # Live-tick countdown rendered BELOW the bubble for scheduled
+            # drafts. The static "⏱ SCHEDULED" badge in the bubble
+            # header is just a flag; this is the actually-ticking timer.
+            if is_draft and secs_until_send is not None:
+                _render_live_countdown(
+                    secs_remaining=secs_until_send,
+                    prefix='⏱ AUTO-SENDS IN',
+                    zero_text='⏱ SENDING NOW…',
+                    height=38,
+                    font_size='0.78rem',
+                    padding='0.35rem 0.7rem',
+                    extra_style='margin:0.2rem 0 0.4rem auto;max-width:280px;',
+                )
 
             # If this is a DRAFT, show inline Send / Edit / Discard so user doesn't navigate away
             # NOTE: lead may be a sqlite3.Row OR a dict — use bracket access with safe fallback
