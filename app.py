@@ -4082,10 +4082,16 @@ def _home_kpi_fragment():
     matches the ring color so the eye instantly knows where the volume is."""
     stats = database.get_dashboard_stats()
     # (label, value, color, click_action)
+    # Label note: 'WARM' = prospects who replied positively to OUR outreach
+    # (status auto-promoted to 'interested' by the inbox classifier when
+    # we have a sent draft + they reply positively). Was labelled
+    # 'INTERESTED' but Joseph's testing flagged that as ambiguous —
+    # 'WARM' is the standard sales term and reads unambiguously as
+    # 'they want to talk', not 'we want to reach out to them'.
     kpi_data = [
         ('HOT', stats['hot_leads'], '#ef4444', 'hot'),
         ('DUE', stats['follow_ups_due'], '#fb923c', 'due'),
-        ('INTERESTED', stats['interested'], '#f59e0b', 'interested'),
+        ('WARM ✓', stats['interested'], '#f59e0b', 'interested'),
         ('TRIAL', stats['trial_offered'], '#06b6d4', 'trial_offered'),
         ('WON', stats['closed_won'], '#10b981', 'closed_won'),
     ]
@@ -4207,6 +4213,18 @@ def show_autopilot():
 
     state = autopilot.get_state()
     running = state.get('running', False)
+
+    # Session-state sentinel: when the user just clicked Launch, file IO
+    # to the state file can lag the immediate st.rerun() — the rerun
+    # then re-reads stale running=False and shows the configure form
+    # again, forcing the user to click Launch a second time. This flag
+    # is set in-memory the moment Launch succeeds, so the very next
+    # render correctly shows the running view. Cleared 8s later so we
+    # don't pin the running view if the autopilot actually died.
+    import time as _time
+    started_at_ms = st.session_state.get('autopilot_just_started_ms', 0)
+    if started_at_ms and (_time.time() * 1000 - started_at_ms) < 8000:
+        running = True
 
     # Check prerequisites
     has_ai = api_keys.has_key('cerebras') or api_keys.has_key('claude')
@@ -4370,6 +4388,8 @@ def _home_autopilot_widget():
                 autopilot.clear_log()
                 success, msg = autopilot.start_autopilot(config)
                 if success:
+                    import time as _t
+                    st.session_state.autopilot_just_started_ms = _t.time() * 1000
                     st.balloons()
                     st.success("🚀 Autopilot launched!")
                     st.rerun()
@@ -4986,6 +5006,12 @@ def _render_autopilot_idle(state):
         autopilot.clear_log()
         success, msg = autopilot.start_autopilot(config)
         if success:
+            import time as _time
+            # Session-state sentinel — the rerun reads file state, but
+            # the file write may lag. The flag survives the rerun and
+            # tells show_autopilot() to render the running view even if
+            # file IO hasn't caught up yet.
+            st.session_state.autopilot_just_started_ms = _time.time() * 1000
             st.balloons()
             # Force immediate state log so live view has something to show right away
             autopilot.log_event('system', '🚀 Autopilot launched — initializing...')
@@ -4995,7 +5021,6 @@ def _render_autopilot_idle(state):
             )
             st.success(f"🚀 Autopilot launched! Live status loading...")
             # Brief pause so the thread can write its first stats
-            import time as _time
             _time.sleep(1)
             st.rerun()
         else:
@@ -5303,10 +5328,26 @@ def _show_engagement_panel():
     1. Bot scans your CRM every N minutes
     2. Finds leads with **AI score ≥ threshold** that haven't been contacted
     3. Generates a personalized NEPQ-style cold email
-    4. **Drafts mode:** Saves to your draft queue for review
-    5. **Send mode:** Sends immediately, schedules Day 3 / 7 / 14 / 21 follow-ups
+    4. **Draft-only mode:** Saves to your draft queue for you to approve.
+    5. **Auto-send mode:** Sends immediately, schedules Day 3 / 7 / 14 / 21 follow-ups.
     6. Stops when prospect replies (Inbox Watcher takes over)
     """)
+    with st.expander("ℹ️ How drafts behave when you toggle modes", expanded=False):
+        st.markdown("""
+        **What happens to existing drafts when you flip a mode?**
+
+        | Scenario | Drafts you already have | New drafts going forward |
+        | --- | --- | --- |
+        | **Draft-only ON** (default) | Stay pending — you approve each one | New drafts created on each cycle, all queued for your approval |
+        | **Auto-send ON** | Existing pending auto-drafts (`nepq_initial`, `nepq_followup_*`, `aqua_intro`) ARE re-considered next cycle and sent if they pass quality + business-hours checks | New drafts are sent immediately on creation |
+        | **Bot off → Bot on** | Auto-drafts created while the bot was off ARE picked up the next time the bot starts in auto-send mode (drained through the same quality + business-hours gate) | Resumes normal cycle |
+        | **You discard a draft** | Aqua records the dismissal — three discards on the same lead auto-suppresses that lead from future autopilot cycles | Future drafts skip that lead |
+
+        **What's protected:**
+        - **Manual compose drafts** are NEVER auto-sent, even in auto-send mode. They wait for your click.
+        - **Escalated drafts** (flagged by the inbox classifier as needing human review) wait for you, regardless of mode.
+        - **Outside business hours** (Mon-Fri 7am-8pm ET), auto-send is paused — drafts stay queued and ship when the window opens.
+        """)
 
     if running:
         # SMTP pre-flight: in AUTO-SEND mode, drafts pile up unsent if the
@@ -6066,7 +6107,8 @@ def _show_escalations(all_pending):
 
             if col3.button("🗑️ Discard", key=f"esc_discard_{d['id']}",
                             use_container_width=True):
-                database.delete_draft(d['id'])
+                with st.spinner("Discarding..."):
+                    database.delete_draft(d['id'])
                 st.rerun()
 
 
@@ -6398,7 +6440,8 @@ def _show_pending_drafts(pending):
 
             if col3.button("🗑️ Discard", key=f"discard_{d['id']}",
                             use_container_width=True):
-                database.delete_draft(d['id'])
+                with st.spinner("Discarding..."):
+                    database.delete_draft(d['id'])
                 st.rerun()
 
 
@@ -6672,15 +6715,33 @@ def show_customer_cards(leads, empty_msg, key_prefix="default"):
         score = lead['lead_score'] or 0
         score_color = "#dc3545" if score >= 70 else "#ffc107" if score >= 40 else "#6c757d"
 
-        # Compute stage progress (0-100%)
+        # Compute stage position. Was rendered as 'X% through funnel'
+        # which Joseph's testing flagged as misleading — a freshly-
+        # researched lead shows 28% which sounds like "deep in pipeline"
+        # but really just means "we know who they are." Switched to the
+        # explicit 'Stage N of M' framing with a tooltip explaining
+        # what the stage actually means. Funnel position is still
+        # rooted in REAL lead activity (sends, replies, manual
+        # progression) — just rendered without the misleading percent.
         current_status = lead['status'] or 'new'
         stage_keys = [s[0] for s in stage_order]
         try:
             current_stage_idx = stage_keys.index(current_status)
-            stage_pct = int((current_stage_idx + 1) / len(stage_order) * 100)
+            stage_num = current_stage_idx + 1
         except ValueError:
             current_stage_idx = -1
-            stage_pct = 0
+            stage_num = 0
+        total_stages = len(stage_order)
+        current_stage_label = next(
+            (lbl for k, lbl in stage_order if k == current_status),
+            current_status.replace('_', ' ').title())
+        stage_explainer = (
+            "New → Researched: AI has scored & enriched the lead. "
+            "Researched → Contacted: a draft was sent. "
+            "Contacted → Interested: prospect replied positively. "
+            "Trial / Sample / Won: progressed manually as the deal advances. "
+            "Stage position reflects real activity — not a probability of close."
+        )
 
         # Build mini progress bar HTML
         progress_dots = ''.join([
@@ -6708,7 +6769,9 @@ def show_customer_cards(leads, empty_msg, key_prefix="default"):
             f"<div style='display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem'>"
             f"<div style='font-size:0.7rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;min-width:70px'>Stage</div>"
             f"<div>{progress_dots}</div>"
-            f"<div style='font-size:0.78rem;color:#475569;margin-left:auto'>{stage_pct}% through funnel</div>"
+            f"<div style='font-size:0.78rem;color:#475569;margin-left:auto' "
+            f"title='{stage_explainer}'>"
+            f"Stage {stage_num} of {total_stages} · {current_stage_label}</div>"
             f"</div></div>"
         )
 
@@ -6994,7 +7057,8 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                     st.rerun()
                 if b3.button("🗑️ Discard", key=f"thread_discard_{key_ns}_{msg['id']}",
                               use_container_width=True):
-                    database.delete_draft(msg['id'])
+                    with st.spinner("Discarding..."):
+                        database.delete_draft(msg['id'])
                     st.rerun()
 
         else:

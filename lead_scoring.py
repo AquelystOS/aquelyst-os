@@ -174,7 +174,38 @@ def calculate_lead_score(lead_data):
     except (ValueError, TypeError):
         pass
 
-    total = base + burden_bonus + contact_bonus + size_bonus
+    # Aqua-learning penalty: if this lead's email domain matches a
+    # 'user_rejected_domain' signal (recorded when the user manually
+    # deleted a lead from this domain), score the new lead down so it
+    # doesn't pop back to the top of the queue. Bigger penalty for
+    # multiple matches — three rejected leads from the same domain
+    # is a strong "stop hunting here" signal.
+    learning_penalty = 0
+    email = (lead_data.get('email') or '').lower()
+    if email and '@' in email:
+        domain = email.split('@', 1)[-1]
+        if domain not in ('gmail.com', 'outlook.com', 'yahoo.com',
+                          'icloud.com', 'hotmail.com', 'aol.com',
+                          'protonmail.com', 'live.com'):
+            try:
+                import database as _db
+                conn = _db.get_connection()
+                c = conn.cursor()
+                try:
+                    c.execute(
+                        "SELECT COALESCE(match_count, 1) AS n FROM junk_signals "
+                        "WHERE kind = ? AND value = ?",
+                        ('user_rejected_domain', domain))
+                    row = c.fetchone()
+                    if row:
+                        n = row['n'] if isinstance(row, dict) else row[0]
+                        learning_penalty = -min(30, int(n) * 10)
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+
+    total = base + burden_bonus + contact_bonus + size_bonus + learning_penalty
     return max(0, min(100, total))
 
 

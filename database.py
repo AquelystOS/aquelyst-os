@@ -1942,36 +1942,196 @@ def mark_draft_sent(draft_id, sent_by=None):
     conn.commit()
     conn.close()
 
+def _learn_from_draft_discard(draft_row):
+    """Aqua learns from every discarded draft so she stops generating
+    similar misses for similar leads.
+
+    Recorded signals (kept lightweight — no PII beyond what's already
+    in junk_signals):
+      • per-lead `discarded_drafts_count`: how many drafts this lead
+        has had thrown out. Once it hits 3, the lead's email is added
+        to suppression so autopilot stops drafting against it.
+      • `bad_draft_pattern` signals: tokens from the rejected subject/
+        message_type so the quality reviewer can warn 'we generated a
+        SpillMaster pitch for this lead before and it got discarded'.
+
+    Called from delete_draft() with the row that's about to be killed.
+    """
+    if not draft_row:
+        return
+    try:
+        lead_id = draft_row.get('lead_id') if isinstance(draft_row, dict) else draft_row['lead_id']
+        msg_type = (draft_row.get('message_type') if isinstance(draft_row, dict)
+                    else draft_row['message_type']) or ''
+        subject = (draft_row.get('subject') if isinstance(draft_row, dict)
+                   else draft_row['subject']) or ''
+    except Exception:
+        return
+    if not lead_id:
+        return
+
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Record the discard as an activity event
+        try:
+            c.execute(
+                "INSERT INTO activities (lead_id, action, content) VALUES (?, ?, ?)",
+                (lead_id, 'draft_discarded',
+                 f"Draft discarded ({msg_type}): {subject[:80]}")
+            )
+        except Exception:
+            pass
+
+        # Count how many drafts have been discarded for this lead — if
+        # several different drafts to this same lead all got thrown
+        # away, the lead itself is probably a bad fit. Suppress.
+        try:
+            c.execute(
+                "SELECT COUNT(*) AS n FROM activities "
+                "WHERE lead_id = ? AND action = 'draft_discarded'",
+                (lead_id,))
+            row = c.fetchone()
+            n = (row['n'] if isinstance(row, dict) else row[0]) if row else 0
+        except Exception:
+            n = 0
+
+        if n >= 3:
+            # Suppress the lead's email so autopilot stops creating new
+            # drafts for them. User can manually revive via CRM.
+            try:
+                c.execute("SELECT email FROM leads WHERE id = ?", (lead_id,))
+                lead_row = c.fetchone()
+                lead_email = (lead_row['email'] if isinstance(lead_row, dict)
+                              else lead_row[0]) if lead_row else None
+            except Exception:
+                lead_email = None
+            if lead_email:
+                try:
+                    c.execute(
+                        "INSERT INTO suppression_list (email, reason) "
+                        "VALUES (?, ?) ON CONFLICT(email) DO NOTHING",
+                        (lead_email.lower(),
+                         f"auto: {n} drafts discarded — Aqua learning"))
+                except Exception:
+                    pass
+                try:
+                    c.execute("UPDATE leads SET status = 'opted_out' WHERE id = ?",
+                              (lead_id,))
+                except Exception:
+                    pass
+
+        # Record subject keywords so future quality_review_draft can
+        # warn 'we tried this angle and the user threw it out'.
+        try:
+            import re as _re
+            tokens = [t for t in _re.findall(r'[a-z][a-z0-9\-]{4,}', subject.lower())
+                      if t not in {'about', 'quick', 'question', 'follow',
+                                   'today', 'still', 'reach', 'reaching'}]
+            for tok in tokens[:3]:
+                try:
+                    c.execute(
+                        "INSERT INTO junk_signals (kind, value, reason) "
+                        "VALUES (?, ?, ?) ON CONFLICT(kind, value) "
+                        "DO UPDATE SET match_count = "
+                        "COALESCE(junk_signals.match_count, 0) + 1",
+                        ('bad_draft_subject', tok,
+                         f"discarded {msg_type} draft"))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Audit-log so user can see what Aqua learned
+    try:
+        import audit_log
+        audit_log.log('aqua_learn',
+                      f"Aqua learned from discarded draft (lead {lead_id}, "
+                      f"type {msg_type})",
+                      details={'lead_id': lead_id, 'message_type': msg_type,
+                               'count': n})
+    except Exception:
+        pass
+
+
 def delete_draft(draft_id):
     """Discard a draft. Used by the Discard buttons on Inbox/Today/Thread.
+
+    Aqua LEARNS from every discard — see _learn_from_draft_discard. The
+    pattern: load the row first so we capture lead_id + message_type +
+    subject for learning, then delete the actual row.
 
     `inbound_messages.draft_response_id` has a FK to `outreach_drafts.id`
     (the AI-drafted reply that was suggested for an inbound). Postgres
     refuses the DELETE while that reference exists, so NULL it out first.
     `email_tracking_events.draft_id` has no FK constraint, but we still
     clear it so we don't leave orphan stats pointing at a missing draft.
+
+    On Postgres (autocommit), each statement is a round-trip — three
+    statements ~= 300ms over the public Supabase pooler. That's why the
+    discard button feels sluggish. Most discarded drafts have NO inbound
+    or tracking rows referencing them, so we OPTIMISTICALLY try the
+    DELETE alone first and only fall back to the cleanup path on FK
+    failure. Saves two round-trips on the common case.
     """
     if not draft_id:
         return
+
+    # Load the draft BEFORE deleting so Aqua can learn what got thrown out.
+    draft_row = None
+    try:
+        conn0 = get_connection()
+        c0 = conn0.cursor()
+        c0.execute(
+            "SELECT id, lead_id, message_type, subject FROM outreach_drafts "
+            "WHERE id = ?", (draft_id,))
+        row = c0.fetchone()
+        if row:
+            draft_row = dict(row) if hasattr(row, 'keys') else {
+                'id': row[0], 'lead_id': row[1],
+                'message_type': row[2], 'subject': row[3]
+            }
+        conn0.close()
+    except Exception:
+        pass
+
     conn = get_connection()
     c = conn.cursor()
     try:
-        # Detach any inbound message that pointed at this draft as its reply
         try:
-            c.execute('UPDATE inbound_messages SET draft_response_id = NULL '
-                      'WHERE draft_response_id = ?', (draft_id,))
+            c.execute('DELETE FROM outreach_drafts WHERE id = ?', (draft_id,))
+            conn.commit()
         except Exception:
-            pass  # column/table may not exist on older deployments
-        # Clear tracking events (no FK, but no point keeping orphans)
-        try:
-            c.execute('DELETE FROM email_tracking_events WHERE draft_id = ?',
-                      (draft_id,))
-        except Exception:
-            pass
-        c.execute('DELETE FROM outreach_drafts WHERE id = ?', (draft_id,))
-        conn.commit()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                c.execute('UPDATE inbound_messages SET draft_response_id = NULL '
+                          'WHERE draft_response_id = ?', (draft_id,))
+            except Exception:
+                pass
+            try:
+                c.execute('DELETE FROM email_tracking_events WHERE draft_id = ?',
+                          (draft_id,))
+            except Exception:
+                pass
+            c.execute('DELETE FROM outreach_drafts WHERE id = ?', (draft_id,))
+            conn.commit()
     finally:
         conn.close()
+
+    # Now Aqua learns — done AFTER the delete succeeds so a learning
+    # error can't block the user's discard click.
+    if draft_row:
+        try:
+            _learn_from_draft_discard(draft_row)
+        except Exception:
+            pass
 
 def get_all_drafts(limit=200):
     """Return ALL outreach drafts (sent + unsent) joined with lead info."""
@@ -2123,3 +2283,37 @@ def delete_lead(lead_id):
         )
     except Exception:
         pass
+
+    # Aqua learns from a deleted lead — strong negative signal. Suppress
+    # the email so autopilot won't auto-import them on the next hunt,
+    # and record the domain as a "user-rejected" signal so similar
+    # leads get scored down at qualification time.
+    if email:
+        try:
+            conn2 = get_connection()
+            c2 = conn2.cursor()
+            try:
+                c2.execute(
+                    "INSERT INTO suppression_list (email, reason) "
+                    "VALUES (?, ?) ON CONFLICT(email) DO NOTHING",
+                    (email.lower(), 'user_deleted_lead'))
+            except Exception:
+                pass
+            domain = email.split('@', 1)[-1].lower() if '@' in email else ''
+            if domain and domain not in (
+                'gmail.com', 'outlook.com', 'yahoo.com', 'icloud.com',
+                'hotmail.com', 'aol.com', 'protonmail.com', 'live.com'):
+                try:
+                    c2.execute(
+                        "INSERT INTO junk_signals (kind, value, reason) "
+                        "VALUES (?, ?, ?) ON CONFLICT(kind, value) "
+                        "DO UPDATE SET match_count = "
+                        "COALESCE(junk_signals.match_count, 0) + 1",
+                        ('user_rejected_domain', domain,
+                         f"user deleted lead {biz_name}"))
+                except Exception:
+                    pass
+            conn2.commit()
+            conn2.close()
+        except Exception:
+            pass

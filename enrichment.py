@@ -5,7 +5,10 @@ import requests
 from urllib.parse import urlparse, urljoin
 
 EMAIL_PATTERN = re.compile(r'[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-PHONE_PATTERN = re.compile(r'(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})')
+# NANP-aware: area code must start 2-9 (no leading 0 or 1), exchange
+# code must also start 2-9. This stops obvious garbage like '041' from
+# being scraped into the CRM. Optional +1 / 1- country code allowed.
+PHONE_PATTERN = re.compile(r'(?:\+?1[-.\s]?)?\(?([2-9][0-9]{2})\)?[-.\s]?([2-9][0-9]{2})[-.\s]?([0-9]{4})')
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -80,8 +83,52 @@ def extract_emails(text, exclude_domains=None):
     return valid_emails
 
 
+_FAKE_AREA_CODES = {
+    # Movie / TV / fiction reservations + obvious junk
+    '555', '000', '111', '222', '333', '444', '666', '777', '888', '999',
+    # Toll-free patterns are valid but bias them downward in get_best_phone
+}
+
+
+def is_valid_us_phone(phone):
+    """Strict NANP validation. Returns True only for plausibly real US/CA
+    phone numbers. Used both at scrape time and as a final guard before
+    a number is written into the CRM."""
+    if not phone:
+        return False
+    digits = ''.join(filter(str.isdigit, str(phone)))
+    if len(digits) == 11 and digits.startswith('1'):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return False
+    area, exch, line = digits[:3], digits[3:6], digits[6:]
+    # Area code: first digit 2-9, no fake-area-code reservations
+    if area[0] in '01':
+        return False
+    if area in _FAKE_AREA_CODES:
+        return False
+    # Exchange (second 3 digits): NANP requires first digit 2-9
+    if exch[0] in '01':
+        return False
+    # Reject all-same-digit lines (e.g. 555-1111) — usually placeholder
+    if len(set(digits)) == 1:
+        return False
+    return True
+
+
+def normalize_phone(phone):
+    """Format a valid US phone as (XXX) YYY-ZZZZ. Returns None for
+    anything that doesn't pass is_valid_us_phone."""
+    if not is_valid_us_phone(phone):
+        return None
+    digits = ''.join(filter(str.isdigit, str(phone)))
+    if len(digits) == 11 and digits.startswith('1'):
+        digits = digits[1:]
+    return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
+
 def extract_phones(text):
-    """Extract US phone numbers."""
+    """Extract US phone numbers (NANP-validated)."""
     if not text:
         return []
 
@@ -90,7 +137,13 @@ def extract_phones(text):
     seen = set()
 
     for area, prefix, line in matches:
+        # Belt-and-suspenders: regex is already restrictive but run the
+        # full validator so obvious-junk numbers can't slip through.
+        if area in _FAKE_AREA_CODES:
+            continue
         formatted = f"({area}) {prefix}-{line}"
+        if not is_valid_us_phone(formatted):
+            continue
         if formatted not in seen:
             seen.add(formatted)
             phones.append(formatted)
@@ -204,5 +257,13 @@ def get_best_email(emails, business_domain=None):
 
 
 def get_best_phone(phones):
-    """Pick the first phone from list."""
-    return phones[0] if phones else None
+    """Pick the first VALID phone from a list. Filters out garbage like
+    '041-...' that older scraping passes might have stored. If everything
+    fails validation, returns None — better empty than wrong."""
+    if not phones:
+        return None
+    for p in phones:
+        normalized = normalize_phone(p)
+        if normalized:
+            return normalized
+    return None

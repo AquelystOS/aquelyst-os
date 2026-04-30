@@ -1786,14 +1786,35 @@ def _generate_query_variations(business_type, location):
 
 
 def _guess_product_from_type(business_type):
-    """Map a hunt-category business_type string to its product line."""
+    """Map a hunt-category business_type string to its product line.
+
+    Livestock + poultry + dairy now route to Duo Equine (they all share
+    the manure/ammonia/animal-odor profile that Duo Equine is built for).
+    Inversion Misting is a delivery method that pairs with any product —
+    it's reserved for non-livestock facility-scale categories where the
+    misting hardware is the differentiator (warehouses, large industrial
+    cleanup zones, etc.).
+
+    Joseph's correction (2026-04-30 testing): chicken coops, poultry,
+    layer/broiler operations, dairy parlors, etc. should recommend Duo
+    Equine — same use case as horse barns. PCB control is industrial
+    spill cleanup → SpillMaster.
+    """
     if not business_type:
         return None
     t = business_type.lower()
+    # LIVESTOCK + POULTRY + DAIRY → Duo Equine (animal odor / manure / ammonia)
     EQUINE = ['horse', 'equestrian', 'equine', 'stable', 'thoroughbred', 'standardbred',
               'polo', 'rodeo', 'dressage', 'trail riding', 'pony', 'tack', 'feed store',
               'mule', 'donkey', 'racing', 'racetrack', 'breeder', 'hunter jumper',
-              'foxhunting', 'carriage', 'mounted police']
+              'foxhunting', 'carriage', 'mounted police',
+              # Livestock & poultry — same odor profile as a barn
+              'chicken coop', 'chicken house', 'hen house', 'henhouse', 'coop',
+              'poultry farm', 'broiler farm', 'layer hen', 'turkey farm', 'duck farm',
+              'dairy farm', 'dairy parlor', 'goat dairy', 'sheep farm',
+              'swine', 'hog farm', 'feedlot', 'cattle ranch', 'beef cattle',
+              'livestock', 'livestock auction', 'animal feed manufacturer',
+              'large indoor equestrian']
     PETS = ['kennel', 'doggy daycare', 'dog boarding', 'cat boarding', 'pet hotel',
              'animal shelter', 'humane society', 'rescue', 'veterinary', 'vet ',
              'grooming', 'pet store', 'dog park', 'pet daycare', 'spay neuter',
@@ -1806,7 +1827,15 @@ def _guess_product_from_type(business_type):
               'sewage', 'landfill', 'public transit', 'correctional', 'jail',
               'pharmaceutical', 'biotech', 'laboratory', 'medical', 'school district',
               'university food', 'mortuary', 'funeral', 'crematorium', 'casino',
-              'convention', 'stadium', 'hotel chain', 'food storage', 'cold storage']
+              'convention', 'stadium', 'hotel chain', 'food storage', 'cold storage',
+              # PCB / industrial chemical contamination
+              'pcb', 'polychlorinated', 'transformer oil', 'hazardous waste',
+              'industrial spill', 'oil spill', 'spill response',
+              # Rendering/grain handle organic processing residue, not animal housing
+              'rendering plant', 'pet food manufacturer',
+              'grain elevator', 'silo', 'ethanol', 'biodiesel',
+              'agricultural processing', 'meat locker',
+              'aquaculture', 'fish farm']
     AMR = ['rv ', ' rv', 'marina', 'yacht', 'boat', 'car dealer', 'auto detail',
            'car wash', 'rideshare', 'limo', 'taxi', 'bus transit', 'school bus',
            'truck stop', 'trucking', 'delivery fleet', 'moving company', 'rental car',
@@ -1820,18 +1849,17 @@ def _guess_product_from_type(business_type):
                   'pet odor', 'pest control', 'carpet cleaning', 'duct cleaning',
                   'crawl space', 'window cleaning', 'pressure washing', 'real estate',
                   'home inspector', 'hoa', 'student housing', 'group home']
-    INVERSION = ['warehouse distribution', 'cold storage', 'food storage warehouse',
-                  'large manufacturing', 'agricultural processing', 'meat locker',
-                  'rendering plant', 'pet food manufacturer', 'animal feed manufacturer',
-                  'grain elevator', 'silo', 'ethanol', 'biodiesel', 'composting site',
-                  'agricultural fairground', 'livestock auction', 'poultry farm',
-                  'broiler farm', 'layer hen', 'turkey farm', 'duck farm',
-                  'dairy farm', 'goat dairy', 'sheep farm', 'swine', 'hog farm',
-                  'feedlot', 'cattle ranch', 'beef cattle', 'aquaculture', 'fish farm',
-                  'commercial greenhouse', 'commercial nursery', 'cannabis cultivation',
-                  'large indoor equestrian', 'dairy parlor']
+    # Inversion is a misting hardware add-on that pairs with any liquid product.
+    # Reserved for non-livestock facility-scale categories where the user
+    # primarily needs facility-wide automated misting.
+    INVERSION = ['warehouse distribution', 'food storage warehouse',
+                  'large manufacturing', 'commercial greenhouse',
+                  'commercial nursery', 'cannabis cultivation',
+                  'agricultural fairground']
     if any(k in t for k in INVERSION):
         return 'Inversion Misting'
+    if any(k in t for k in EQUINE):  # check livestock/equine BEFORE pets/spill
+        return 'Duo Equine'
     if any(k in t for k in AMR):
         return 'AMR'
     if any(k in t for k in PETS):
@@ -1840,8 +1868,68 @@ def _guess_product_from_type(business_type):
         return 'SpillMaster'
     if any(k in t for k in HOUSEHOLD):
         return 'HouseHold'
-    if any(k in t for k in EQUINE):
+    return None
+
+
+def guess_product_from_message(text):
+    """Pick the right product based on what a prospect actually wrote.
+
+    This is a context-aware router for INBOUND messages — read what they
+    said, pick the product that matches, instead of defaulting to the
+    lead-magnet (which used to make Aqua reply 'Duo Equine for your
+    barn setup' to a customer who asked about PCB control).
+
+    Returns the product name (e.g. 'Duo Equine') or None if nothing
+    matched. Caller should fall back to the lead's stored product_fit
+    or pain_hypothesis when this returns None.
+    """
+    if not text:
+        return None
+    t = text.lower()
+    # Order matters — check the most specific signals first so a generic
+    # 'odor' keyword doesn't beat a specific 'PCB' or 'horse' keyword.
+    PCB_INDUSTRIAL = ['pcb', 'polychlorinated', 'transformer oil',
+                       'hazardous waste', 'oil spill', 'industrial spill',
+                       'chemical spill', 'hazmat', 'biohazard',
+                       'crime scene', 'spill response', 'mold remediation',
+                       'fire damage', 'food processing', 'meat processing',
+                       'dairy processing', 'commercial kitchen', 'restaurant',
+                       'manufacturing facility', 'waste management',
+                       'composting', 'sewage', 'landfill', 'rendering',
+                       'grain elevator', 'aquaculture', 'fish farm']
+    LIVESTOCK_BARN = ['horse', 'equestrian', 'equine', 'stable', 'barn',
+                       'stall', 'manure', 'ammonia', 'fly', 'flies',
+                       'chicken coop', 'chicken house', 'hen house',
+                       'henhouse', 'coop ', ' coop', 'poultry', 'broiler',
+                       'layer hen', 'turkey', 'duck farm', 'dairy',
+                       'goat', 'sheep', 'hog', 'swine', 'feedlot',
+                       'cattle', 'livestock', 'rooster', 'hens',
+                       'pony', 'donkey', 'mule', 'tack room', 'trailer kit']
+    PETS_KENNEL = ['kennel', 'dog boarding', 'cat boarding', 'pet hotel',
+                    'shelter', 'rescue', 'veterinary', 'vet clinic',
+                    'grooming', 'pet daycare', 'aquarium', 'reptile']
+    AMR_TRANSPORT = ['rv ', ' rv', ' rvs', 'marina', 'marinas', 'yacht',
+                      'boat ', ' boat', 'cabin cruiser', 'pontoon',
+                      'fishing boat', 'cruise ship', 'ferry', 'aircraft',
+                      'aviation', 'fbo', 'private jet', 'rideshare',
+                      'limo', 'taxi', 'bus', 'school bus', 'transit',
+                      'trucking', 'delivery fleet', 'rental car',
+                      'campground', 'campervan', 'motorcoach']
+    HOUSEHOLD_HOME = ['apartment', 'condo', 'house cleaning', 'maid',
+                       'carpet cleaning', 'duct cleaning', 'home odor',
+                       'kitchen smell', 'basement', 'crawl space',
+                       'pet odor in', 'litter box', 'baby room',
+                       'nursery', 'laundry']
+    if any(k in t for k in PCB_INDUSTRIAL):
+        return 'SpillMaster'
+    if any(k in t for k in LIVESTOCK_BARN):
         return 'Duo Equine'
+    if any(k in t for k in PETS_KENNEL):
+        return 'Pets'
+    if any(k in t for k in AMR_TRANSPORT):
+        return 'AMR'
+    if any(k in t for k in HOUSEHOLD_HOME):
+        return 'HouseHold'
     return None
 
 

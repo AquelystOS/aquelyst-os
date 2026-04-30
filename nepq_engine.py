@@ -1177,6 +1177,33 @@ def generate_initial_outreach(lead_data):
         "bracketed placeholder. Just acknowledge the absence by being direct."
     )
 
+    # Pick the right product to recommend based on what we actually know
+    # about this lead. Joseph's testing exposed Aqua defaulting to Duo
+    # Equine for prospects who hadn't said anything horse-related (e.g.
+    # marina owner, chicken-coop owner). Use the explicit stored
+    # product_fit if set, otherwise infer from business_type / notes /
+    # pain. Pass the result to the LLM as a hard locked-in product so it
+    # can't pivot to the lead-magnet by default.
+    product_hint = (lead_data.get('product_fit') or '').strip()
+    if not product_hint:
+        try:
+            import lead_discovery as _ld
+            signal = ' '.join(filter(None, [
+                str(lead_data.get('business_type') or ''),
+                str(lead_data.get('pain_hypothesis') or ''),
+                str(lead_data.get('notes') or '')[:300],
+            ]))
+            product_hint = _ld.guess_product_from_message(signal) or ''
+        except Exception:
+            product_hint = ''
+    product_block = (
+        f"\n## RECOMMEND THIS PRODUCT (locked-in based on signals):\n"
+        f"  → **{product_hint}**\n"
+        f"Use ONLY this product in the message. Do not pivot to a different "
+        f"product line just because it's the lead magnet.\n"
+        if product_hint else ""
+    )
+
     # Cross-user awareness: if a teammate touched this lead recently, tell
     # the AI so it doesn't repeat their angle. The lead's last_contacted_by
     # column is set by every send/auto-engagement.
@@ -1201,7 +1228,7 @@ PROSPECT:
 - Location: {location or 'unknown'}
 - Known pain/problem: {pain or 'unknown — you may need to use a generic curiosity opener'}
 - Personalized hook from research: {hook or 'none'}
-{research_block}{voice_block}{peer_warning}
+{product_block}{research_block}{voice_block}{peer_warning}
 YOU ARE: {current_user['name']} ({current_user['role']}) — sign off as "{sender_first}"
 
 EMAIL REQUIREMENTS:
@@ -1534,12 +1561,43 @@ Subject: Re: <previous subject>
 
 <body>"""
     else:
+        # Pick the right product based on WHAT THEY SAID (not what we
+        # stored on the lead). The inbound message is the strongest
+        # signal — a prospect who asks about PCB control needs SpillMaster
+        # even if our lead record says product_fit='Duo Equine'.
+        # Joseph's 2026-04-30 testing: godbangers asked about PCB control,
+        # got a Duo Equine reply because the bot defaulted to the lead
+        # magnet. This block prevents that.
+        product_hint = ''
+        try:
+            import lead_discovery as _ld
+            # Inbound text wins; lead-side fields are tiebreakers.
+            product_hint = _ld.guess_product_from_message(
+                their_latest_message) or ''
+            if not product_hint:
+                product_hint = (lead_data.get('product_fit') or '').strip()
+            if not product_hint:
+                signal = ' '.join(filter(None, [
+                    str(lead_data.get('business_type') or ''),
+                    str(lead_data.get('pain_hypothesis') or ''),
+                ]))
+                product_hint = _ld.guess_product_from_message(signal) or ''
+        except Exception:
+            pass
+        product_block = (
+            f"\nRECOMMEND THIS PRODUCT (matched to what they said): "
+            f"**{product_hint}**. Stay locked to this product in your "
+            f"reply. Do NOT pivot to Duo Equine by default — that was a "
+            f"prior bug.\n"
+            if product_hint else ""
+        )
+
         # PROSPECT MODE — NEPQ but RESPOND TO WHAT THEY SAID FIRST
         user_msg = f"""The prospect just replied. Read what they LITERALLY said and respond to THAT — don't pivot to what you want to discuss.
 
 PROSPECT: {first_name} at {business}
 Pain context: {lead_data.get('pain_hypothesis', 'unknown')}
-
+{product_block}
 WHAT THEY LITERALLY SAID:
 \"\"\"
 {their_latest_message}

@@ -16,46 +16,63 @@ DEFAULT_PRODUCTS = [
     {
         'name': 'Duo Equine — Odor Eliminator & Fly Control',
         'short_description': (
-            'Patented molecular converter for barns, stalls, trailers, and equine biosecurity. '
-            'Eliminates ammonia at the source and reduces fly-attracting compounds.'
+            'Patented molecular converter for barns, stalls, trailers, equine biosecurity, '
+            'and livestock housing of any kind (chicken coops, dairy parlors, hog barns, '
+            'feedlots, sheep & goat operations). Eliminates ammonia at the source and '
+            'reduces fly-attracting compounds.'
         ),
         'long_description': (
-            'Built for the equine world — designed with one mission: ensure horses '
-            'and animals on the farm are SAFE while eliminating odors. '
+            'Built for the equine world and any animal-housing environment that produces '
+            'manure, urine, and ammonia odors — designed with one mission: ensure animals '
+            'on the farm or facility are SAFE while eliminating odors at the source. '
             'Powered by patented Remedia International technology trusted by the EPA. '
-            'A molecular converter built for equine biosecurity. Targets odor-causing '
-            'compounds at their source: urine, manure, ammonia, wet bedding, organic waste. '
+            'A molecular converter that targets odor-causing compounds at their source: '
+            'urine, manure, ammonia, wet bedding, fly-attracting organic waste. '
             'Used in horse stalls, barn aisles, tack rooms, trailers, run-in sheds, '
-            'and high-traffic barn areas. Available in 1, 5, and 55 gallon sizes. '
-            'Inversion misting system available for large-area facility-wide application.'
+            'high-traffic barn areas, AND in chicken coops/hen houses, broiler & layer '
+            'operations, turkey/duck farms, dairy parlors, hog/swine barns, sheep & goat '
+            'pens, cattle feedlots, and any commercial livestock housing. Available in 1, '
+            '5, and 55 gallon sizes. Inversion misting system available for facility-wide '
+            'application across stall rows, coops, and barn aisles.'
         ),
         'price': '$62.50 (1 gal) · 5 gal & 55 gal also available',
         'url': 'https://aquelyst.com/products/duo-equine',
         'best_for': (
-            'horse boarding facilities, equestrian centers, stables, trainers, '
-            'breeders, rescues, tack shops, feed stores — PRIMARY product for equine prospects'
+            'horse boarding facilities, equestrian centers, stables, trainers, breeders, '
+            'rescues, tack shops, feed stores, chicken coops, poultry farms (broiler/layer), '
+            'turkey & duck farms, dairy parlors, hog/swine barns, sheep & goat operations, '
+            'cattle feedlots — PRIMARY product whenever the question is about animal '
+            'manure / ammonia / fly odor in housing'
         ),
         'is_lead_magnet': True,
     },
     {
-        'name': 'SpillMaster (SM) — Spill, Waste & Organic Mess Odor Eliminator',
+        'name': 'SpillMaster (SM) — Spill, Waste & Industrial-Grade Odor Eliminator',
         'short_description': (
-            'Non-toxic molecular converter for spill cleanup, waste areas, and high-impact '
-            'environments. Resolves spill odors at the source — not masking.'
+            'Non-toxic molecular converter for spill cleanup, hazardous-residue remediation, '
+            'PCB-contaminated environments, waste areas, and high-impact industrial spaces. '
+            'Resolves odors at the source — not masking.'
         ),
         'long_description': (
-            'Engineered for professional spill response and routine cleanup. Patented Remedia '
-            'International technology. Effective on organic spills, food spoilage, bodily fluids, '
-            'trash rooms, dumpsters, transportation/logistics cleanup, commercial/industrial '
-            'environments. Safe for use while people are present. Suitable for commercial '
-            'facilities, food service, healthcare, public spaces, transit hubs, waste management. '
-            'Available in 1, 5, and 55 gallon sizes. Inversion misting available for facilities.'
+            'Engineered for professional spill response, hazardous-residue remediation, '
+            'and routine industrial cleanup. Patented Remedia International technology. '
+            'Effective on organic spills, food spoilage, bodily fluids, trash rooms, '
+            'dumpsters, transportation/logistics cleanup, PCB-contaminated zones, '
+            'transformer-oil residue, hazardous-waste handling areas, oil-spill response '
+            'sites, biohazard / crime-scene environments, mold/fire damage remediation. '
+            'Safe for use while people are present. Suitable for commercial facilities, '
+            'food service/processing, healthcare, public spaces, transit hubs, waste '
+            'management, water-treatment plants, sewage operations, rendering plants, '
+            'grain elevators, and industrial-cleanup operations. Available in 1, 5, and '
+            '55 gallon sizes. Inversion misting available for large facilities.'
         ),
         'price': '$75.00 (1 gal) · 5 gal & 55 gal also available',
         'url': 'https://aquelyst.com/products/spillmaster',
         'best_for': (
-            'commercial facilities, food service/processing, healthcare, transit hubs, '
-            'waste management, industrial cleanup operations'
+            'PCB control & remediation, oil & chemical spill response, hazmat/biohazard '
+            'cleanup, mold & fire-damage restoration, food service/processing, healthcare, '
+            'transit hubs, waste management, water treatment, sewage operations, rendering '
+            'plants, grain elevators, industrial cleanup operations'
         ),
         'is_lead_magnet': False,
     },
