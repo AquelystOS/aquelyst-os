@@ -1917,6 +1917,18 @@ def mark_draft_sent(draft_id, sent_by=None):
     conn.commit()
     conn.close()
 
+def delete_draft(draft_id):
+    """Discard a draft. Used by the Discard buttons on Inbox/Today/Thread."""
+    if not draft_id:
+        return
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('DELETE FROM outreach_drafts WHERE id = ?', (draft_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
 def get_all_drafts(limit=200):
     """Return ALL outreach drafts (sent + unsent) joined with lead info."""
     conn = get_connection()

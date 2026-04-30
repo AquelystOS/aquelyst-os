@@ -619,6 +619,25 @@ st.markdown("""
     [data-testid="stForm"] [data-testid="stWidgetLabel"] {
         color: var(--ink-soft) !important;
     }
+    /* stMetric labels — Streamlit nests the visible text in <p>/<div>
+       inside the <label>, and the broader .stApp label * rule above
+       paints those white. Override with descendant selectors so the
+       label is readable against the white metric card. */
+    [data-testid="stMetric"] label,
+    [data-testid="stMetric"] label *,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"],
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+    [data-testid="stMetric"] [data-testid="stWidgetLabel"],
+    [data-testid="stMetric"] [data-testid="stWidgetLabel"] *,
+    [data-testid="stMetric"] [data-testid="stWidgetLabel"] p,
+    [data-testid="stMetric"] [data-testid="stWidgetLabel"] div {
+        color: var(--ink-soft) !important;
+        opacity: 1 !important;
+    }
+    [data-testid="stMetric"] [data-testid="stMetricValue"],
+    [data-testid="stMetric"] [data-testid="stMetricValue"] * {
+        color: var(--ink) !important;
+    }
 
     .main {padding-top: 0.5rem;}
     .block-container {
@@ -5968,11 +5987,7 @@ def _show_escalations(all_pending):
 
             if col3.button("🗑️ Discard", key=f"esc_discard_{d['id']}",
                             use_container_width=True):
-                conn = database.get_connection()
-                cur = conn.cursor()
-                cur.execute('DELETE FROM outreach_drafts WHERE id = ?', (d['id'],))
-                conn.commit()
-                conn.close()
+                database.delete_draft(d['id'])
                 st.rerun()
 
 
@@ -6304,12 +6319,7 @@ def _show_pending_drafts(pending):
 
             if col3.button("🗑️ Discard", key=f"discard_{d['id']}",
                             use_container_width=True):
-                # Just delete the draft
-                conn = database.get_connection()
-                cur = conn.cursor()
-                cur.execute('DELETE FROM outreach_drafts WHERE id = ?', (d['id'],))
-                conn.commit()
-                conn.close()
+                database.delete_draft(d['id'])
                 st.rerun()
 
 
@@ -6905,11 +6915,7 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                     st.rerun()
                 if b3.button("🗑️ Discard", key=f"thread_discard_{key_ns}_{msg['id']}",
                               use_container_width=True):
-                    conn = database.get_connection()
-                    cur = conn.cursor()
-                    cur.execute('DELETE FROM outreach_drafts WHERE id = ?', (msg['id'],))
-                    conn.commit()
-                    conn.close()
+                    database.delete_draft(msg['id'])
                     st.rerun()
 
         else:
