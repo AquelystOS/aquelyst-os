@@ -8311,27 +8311,78 @@ def setup_email_tab():
 
         col1, col2 = st.columns(2)
         if col1.button("✉️ Send a test email to myself", type="primary", use_container_width=True):
-            with st.spinner("Sending..."):
-                success, msg = smtp_sender.send_email(
-                    cfg['email'], "Aqua test — email connection check",
-                    f"Hi {(cfg.get('sender_name') or 'there').split()[0]},\n\n"
-                    "Quick test from Aqua (your AI sales assistant).\n\n"
-                    "If you got this, your email setup is working perfectly!\n\n"
-                    "— Aqua"
+            # Two-step diagnostic so we can see exactly where a problem is:
+            # 1. SMTP login → confirms credentials still work
+            # 2. SMTP send → confirms message was accepted by server
+            from_addr = cfg['email']
+            with st.spinner("Step 1/2 — verifying SMTP login..."):
+                login_ok, login_msg = smtp_sender.test_smtp_connection(
+                    cfg['provider'], from_addr, cfg['app_password']
                 )
-                if success:
-                    st.balloons()
-                    st.success("✅ Sent! Check your inbox.")
-                else:
-                    st.error(translate_smtp_error(msg))
+            if not login_ok:
+                st.error(f"❌ SMTP login failed: {login_msg}")
+                st.caption("Re-create your App Password and reconnect — the saved one is no longer valid.")
+            else:
+                st.info(f"✓ Logged in to {cfg['provider'].title()} as {from_addr}")
+                with st.spinner("Step 2/2 — sending test email..."):
+                    success, send_msg = smtp_sender.send_email(
+                        from_addr, "Aqua test — email connection check",
+                        f"Hi {(cfg.get('sender_name') or 'there').split()[0] if cfg.get('sender_name') else 'there'},\n\n"
+                        "Quick test from Aqua (your AI sales assistant).\n\n"
+                        "If you got this, your email setup is working perfectly!\n\n"
+                        "— Aqua"
+                    )
+                    if success:
+                        st.balloons()
+                        st.success(f"✅ {send_msg}")
+                        st.caption("Check your inbox AND the Spam folder. If it's not in either, your provider may be blocking outbound to that recipient.")
+                    else:
+                        st.error(f"❌ Send failed: {translate_smtp_error(send_msg)}")
+                        st.code(send_msg, language=None)
 
         if col2.button("🔄 Disconnect & use a different email", use_container_width=True):
-            import os as _os
-            if _os.path.exists(smtp_sender.CONFIG_FILE):
-                _os.remove(smtp_sender.CONFIG_FILE)
-                if 'email_wizard_step' in st.session_state:
-                    del st.session_state.email_wizard_step
-                st.rerun()
+            smtp_sender.delete_smtp_config()  # clears DB row + legacy file
+            if 'email_wizard_step' in st.session_state:
+                del st.session_state.email_wizard_step
+            st.rerun()
+
+        # === Deliverability diagnostic — send to ANY address ===
+        # Useful when a real send appears to "succeed" but the recipient never
+        # gets the email. Lets the user test whether the issue is at the
+        # recipient end (spam folder, address typo) vs a sender-side problem.
+        with st.expander("🔍 Deliverability check — send to any address", expanded=False):
+            st.caption(
+                "Use this if a recent send was logged as 'sent' but the "
+                "recipient never got it. Common causes: typo in their email, "
+                "their provider routed it to spam, or the message bounced "
+                "asynchronously. This sends a tiny test message you can "
+                "check arrived."
+            )
+            test_to = st.text_input(
+                "Recipient email to test",
+                placeholder="someone@example.com",
+                key="deliv_test_to",
+            )
+            if st.button("📨 Send 1-line test", key="deliv_test_btn",
+                          disabled=not test_to or '@' not in (test_to or '')):
+                with st.spinner(f"Sending test to {test_to}..."):
+                    ok, send_msg = smtp_sender.send_email(
+                        test_to.strip(),
+                        "AqueLyst deliverability test (please ignore)",
+                        "This is a one-line deliverability test from AqueLyst. "
+                        "If you received this, the email path is working.\n\n— AqueLyst"
+                    )
+                    if ok:
+                        st.success(f"✅ {send_msg}")
+                        st.caption(
+                            "SMTP server accepted the message. If the recipient "
+                            "still doesn't see it, ask them to check Spam/Junk "
+                            "and Promotions, and confirm the address is spelled "
+                            "exactly right."
+                        )
+                    else:
+                        st.error(f"❌ {translate_smtp_error(send_msg)}")
+                        st.code(send_msg, language=None)
         return
 
     # ===== Wizard state =====

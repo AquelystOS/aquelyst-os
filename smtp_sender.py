@@ -437,9 +437,26 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
             if preset['use_tls']:
                 server.starttls()
             server.login(config['email'], config['app_password'])
-            server.send_message(msg)
+            # send_message returns a dict of refused recipients on PARTIAL refusal
+            # (raises SMTPRecipientsRefused only if ALL recipients refused). For
+            # single-recipient sends an empty dict means the SMTP server accepted
+            # the message for delivery. We capture & surface the dict so a partial
+            # refusal can't masquerade as success.
+            refused = server.send_message(msg) or {}
 
-        # Audit log every successful send
+        if refused:
+            try:
+                import audit_log
+                audit_log.log('email_send_failed',
+                              f"Partial refusal for {to_email}: {refused}",
+                              details={'to': to_email, 'subject': subject,
+                                       'refused': str(refused)[:300],
+                                       'error': 'partial_refusal'})
+            except Exception:
+                pass
+            return False, f"Recipient refused by SMTP server: {refused}"
+
+        # Audit log every successful send (with the SMTP account that sent)
         try:
             import audit_log
             audit_log.log_email_sent(
@@ -452,7 +469,7 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
         except Exception:
             pass
 
-        return True, "Email sent successfully"
+        return True, f"Sent via {config['email']} → {to_email}"
 
     except smtplib.SMTPRecipientsRefused:
         try:
