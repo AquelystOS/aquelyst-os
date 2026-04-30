@@ -251,8 +251,11 @@ def engage_lead_initial(lead, auto_send=False):
                             'reason': reason})
         return draft_id
 
-    # Aqua quality gate — review the draft before it goes out.
-    # score 7+ → send, 5-6 → queue for human, <5 → kill (no send).
+    # Aqua quality gate — when the user has explicitly opted into auto-send,
+    # only TRUE SPAM-TIER drafts are blocked. Borderline drafts (5-6) still
+    # ship — Joseph chose auto-send, so trust him. Only the hallucination /
+    # placeholder / wrong-name cases (score < 5) get blocked outright. Score
+    # is still logged for visibility.
     if auto_send:
         try:
             review = nepq_engine.quality_review_draft(
@@ -274,18 +277,13 @@ def engage_lead_initial(lead, auto_send=False):
                                 'score': review['score'],
                                 'issues': review['issues']})
             return draft_id
+        # 'queue' or 'send' both fall through and ship. Tag activity log
+        # with the score so borderline-quality sends are still visible.
         if review['verdict'] == 'queue':
-            database.update_lead(lead['id'], status='drafted')
-            database.log_activity(lead['id'], 'auto_engagement_drafted',
-                                   f"⚠️ Queued for review (Aqua score "
-                                   f"{review['score']}/10): {review['reason']}")
-            increment_stat('initial_emails_drafted')
-            log_event('queued',
-                       f"⚠️ Queued for human review ({review['score']}/10) — {lead['business_name']}: {review['reason']}",
+            log_event('borderline',
+                       f"⚠️ Borderline ({review['score']}/10) but sending — {lead['business_name']}",
                        details={'lead_id': lead['id'], 'draft_id': draft_id,
                                 'score': review['score']})
-            return draft_id
-        # else: verdict == 'send' — fall through to actual send
 
     if auto_send:
         # Approve + send (draft_id passed for click-tracking link rewriting)
@@ -392,7 +390,9 @@ def engage_lead_followup(lead, auto_send=False):
                             'reason': reason})
         return draft_id
 
-    # Aqua quality gate on followups too
+    # Aqua quality gate on followups — same lenient policy as initial:
+    # only KILL verdicts (score <5, true spam-tier) block the send. Joseph
+    # opted into auto-send → trust the opt-in for borderline (5-6) drafts.
     if auto_send:
         try:
             review = nepq_engine.quality_review_draft(
@@ -410,14 +410,10 @@ def engage_lead_followup(lead, auto_send=False):
                                 'score': review['score']})
             return draft_id
         if review['verdict'] == 'queue':
-            database.log_activity(lead['id'], 'auto_followup_drafted',
-                                   f"⚠️ Followup #{touch_number} queued (Aqua score {review['score']}/10)")
-            increment_stat('followups_drafted')
-            log_event('queued',
-                       f"⚠️ Followup #{touch_number} queued for review ({review['score']}/10) — {lead['business_name']}",
+            log_event('borderline',
+                       f"⚠️ Followup #{touch_number} borderline ({review['score']}/10) but sending — {lead['business_name']}",
                        details={'lead_id': lead['id'], 'draft_id': draft_id,
                                 'score': review['score']})
-            return draft_id
 
     if auto_send:
         database.approve_draft(draft_id)
@@ -449,6 +445,90 @@ def engage_lead_followup(lead, auto_send=False):
         return draft_id
 
 
+def drain_pending_auto_drafts(max_per_run=20):
+    """Send any unsent autopilot/auto-engagement drafts that are sitting
+    in the queue. Skips human-created drafts (compose, manual_send) — those
+    are queued intentionally for human review.
+
+    Quality-gate is still applied at KILL threshold (placeholders /
+    hallucinations get blocked even on retry) but borderline drafts are
+    sent because the human opted into auto-send.
+
+    Returns count sent + count blocked."""
+    sent_count = 0
+    blocked_count = 0
+    try:
+        pending = database.get_pending_drafts(limit=200)
+    except Exception:
+        return 0, 0
+
+    AUTO_PREFIXES = ('nepq_initial', 'nepq_followup_', 'auto_reply_to_',
+                      'aqua_intro', 'ESCALATED_')
+    for d in pending[:max_per_run]:
+        msg_type = d.get('message_type') or ''
+        if not msg_type.startswith(AUTO_PREFIXES):
+            continue  # Leave human compose/manual drafts alone
+        lead_id = d.get('lead_id')
+        if not lead_id:
+            continue
+        lead = database.get_lead(lead_id)
+        if not lead or not lead.get('email'):
+            continue
+        if lead.get('opt_out') or database.is_suppressed(lead['email']):
+            continue
+        # Don't pile a send on an already-replied thread
+        try:
+            if database.has_inbound_messages(lead_id):
+                continue
+        except Exception:
+            pass
+
+        # Business-hours guardrail still applies
+        allowed, reason = _within_business_hours()
+        if not allowed:
+            log_event('queued',
+                       f"⏸ Holding pending draft for {lead['business_name']} ({reason})")
+            continue
+
+        # Quality gate at KILL threshold only
+        try:
+            review = nepq_engine.quality_review_draft(
+                d.get('subject') or '', d.get('content') or '', dict(lead))
+        except Exception:
+            review = {'score': 7, 'verdict': 'send'}
+        if review.get('verdict') == 'kill':
+            blocked_count += 1
+            log_event('blocked',
+                       f"🛑 Pending draft blocked ({review.get('score', 0)}/10) — {lead['business_name']}",
+                       details={'lead_id': lead_id, 'draft_id': d['id']})
+            continue
+
+        # Send
+        try:
+            success, send_msg = smtp_sender.send_email(
+                lead['email'], d.get('subject') or '',
+                d.get('content') or '', draft_id=d['id'])
+        except Exception as e:
+            log_event('error', f"Drain send failed for {lead['business_name']}: {str(e)[:80]}")
+            continue
+        if success:
+            database.approve_draft(d['id'])
+            database.mark_draft_sent(d['id'])
+            database.update_lead(lead_id, status='contacted',
+                                  last_contacted=datetime.now().isoformat())
+            database.log_activity(lead_id, 'auto_drain_sent',
+                                   f"📤 Pending {msg_type} sent: {(d.get('subject') or '')[:50]}")
+            sent_count += 1
+            log_event('sent',
+                       f"📤 Drained pending draft → {lead['business_name']}",
+                       details={'lead_id': lead_id, 'draft_id': d['id']})
+        else:
+            log_event('error',
+                       f"Drain SMTP failed for {lead['business_name']}: {(send_msg or '')[:80]}")
+        time.sleep(1)
+    return sent_count, blocked_count
+
+
 def run_one_cycle():
     """Process one engagement cycle."""
     state = get_state()
@@ -461,6 +541,16 @@ def run_one_cycle():
     update_state(last_run=datetime.now().isoformat())
     log_event('cycle_start',
                f"🔄 Engagement cycle: min_score={min_score}, mode={'send' if auto_send else 'draft'}")
+
+    # 0. Drain any pending autopilot drafts FIRST (catches drafts created
+    #    on prior cycles that didn't auto-send for any reason — outside
+    #    business hours then, quality-gated as 'queue' on the previous
+    #    strict policy, etc.)
+    if auto_send:
+        sent_n, blocked_n = drain_pending_auto_drafts(max_per_run=max_per_run * 4)
+        if sent_n or blocked_n:
+            log_event('cycle_drain',
+                       f"📤 Drained pending: sent {sent_n}, blocked {blocked_n}")
 
     # 1. Engage new hot leads
     candidates = find_engagement_candidates(min_score)
