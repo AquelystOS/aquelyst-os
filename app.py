@@ -8934,63 +8934,68 @@ def setup_data_tab():
 # ===========================================================================
 # HELPERS
 # ===========================================================================
-def format_date_friendly(date_str):
-    """Convert ISO/SQLite UTC date to friendly relative format in user's local TZ.
+def _et_zone():
+    """Return America/New_York ZoneInfo for display. Auto-handles DST so
+    EST in winter, EDT in summer. Falls back to UTC if zoneinfo missing."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo('America/New_York')
+    except Exception:
+        from datetime import timezone as _tz
+        return _tz.utc
 
-    SQLite's CURRENT_TIMESTAMP returns naive UTC strings like '2026-04-26 20:20:14'.
-    We must treat those as UTC and convert to local for accurate 'X min ago' display.
-    """
+
+def format_date_friendly(date_str):
+    """Convert ISO/SQLite UTC date to friendly relative format displayed in
+    Eastern Time (the OS's display timezone — Joseph + team are in ET).
+
+    SQLite's CURRENT_TIMESTAMP and Postgres-naive timestamps come back as
+    UTC. We treat naive values as UTC, then format in ET. Streamlit Cloud
+    servers run in UTC, so naive `datetime.now()` values stored in logs
+    are also UTC-correct."""
     if not date_str:
         return "—"
     try:
         from datetime import timezone as _tz
-        # Strip Z if present
-        clean = date_str.replace('Z', '+00:00')
+        clean = str(date_str).replace('Z', '+00:00')
         dt = datetime.fromisoformat(clean)
-
-        # If naive, treat as UTC (matches SQLite's CURRENT_TIMESTAMP behavior)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=_tz.utc)
 
-        # Use timezone-aware "now" so the math is correct regardless of user's TZ
         now = datetime.now(_tz.utc)
         delta = now - dt
         total_seconds = delta.total_seconds()
 
-        # Negative or near-zero → just now
         if total_seconds < 60:
             return "just now"
         if total_seconds < 3600:
-            mins = int(total_seconds / 60)
-            return f"{mins}m ago"
+            return f"{int(total_seconds / 60)}m ago"
         if total_seconds < 86400:
-            hours = int(total_seconds / 3600)
-            return f"{hours}h ago"
+            return f"{int(total_seconds / 3600)}h ago"
         if total_seconds < 86400 * 2:
             return "yesterday"
         if total_seconds < 86400 * 7:
-            days = int(total_seconds / 86400)
-            return f"{days}d ago"
+            return f"{int(total_seconds / 86400)}d ago"
 
-        # Older than a week — show the date in user's local TZ
-        local_dt = dt.astimezone()
-        return local_dt.strftime("%b %d")
+        # Older than a week — display the date in ET regardless of server TZ
+        return dt.astimezone(_et_zone()).strftime("%b %d")
     except Exception:
         return date_str
 
 
 def format_timestamp_full(date_str):
-    """Convert UTC timestamp to full local-time display with seconds: 'Apr 26, 4:23:14 PM EDT'"""
+    """Convert UTC timestamp to full ET display with seconds:
+    'Apr 26, 4:23:14 PM EDT' (or EST in winter)."""
     if not date_str:
         return "—"
     try:
         from datetime import timezone as _tz
-        clean = date_str.replace('Z', '+00:00')
+        clean = str(date_str).replace('Z', '+00:00')
         dt = datetime.fromisoformat(clean)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=_tz.utc)
-        local = dt.astimezone()
-        return local.strftime("%b %d, %-I:%M:%S %p %Z")
+        et = dt.astimezone(_et_zone())
+        return et.strftime("%b %d, %-I:%M:%S %p %Z")
     except Exception:
         return date_str
 
