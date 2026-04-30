@@ -568,6 +568,36 @@ st.markdown("""
     .stApp [data-testid="stMarkdownContainer"] b {
         color: #e2e8f0;
     }
+    /* When a markdown card has an inline background or dark inline color
+       (i.e. it's a white/colored card painted into the dark page), its
+       <strong>/<b> children must inherit the parent's intended color
+       instead of the global light-on-dark default. Without this, the
+       autopilot live cards and similar inline-styled cards show invisible
+       white-on-white bold text. */
+    [data-testid="stMarkdownContainer"] [style*="background:#fff"] strong,
+    [data-testid="stMarkdownContainer"] [style*="background:#fff"] b,
+    [data-testid="stMarkdownContainer"] [style*="background:#ffffff"] strong,
+    [data-testid="stMarkdownContainer"] [style*="background:#ffffff"] b,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#f"] strong,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#f"] b,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#e"] strong,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#e"] b,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#d"] strong,
+    [data-testid="stMarkdownContainer"] [style*="background:linear-gradient(135deg,#d"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#0f172a"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#0f172a"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#0a0f1c"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#0a0f1c"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#1e3a8a"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#1e3a8a"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#78350f"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#78350f"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#92400e"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#92400e"] b,
+    [data-testid="stMarkdownContainer"] [style*="color:#166534"] strong,
+    [data-testid="stMarkdownContainer"] [style*="color:#166534"] b {
+        color: inherit !important;
+    }
     /* Streamlit widget labels (text_input / selectbox / radio / checkbox /
        slider) sit above the widget on the page bg — light. The * descendant
        selectors catch the inner <div>/<p>/<span> Streamlit puts the actual
@@ -1185,6 +1215,24 @@ st.markdown("""
         [style*="flex:0 0 100px"] {
             flex: 0 0 78px !important;
             font-size: 0.7rem !important;
+        }
+
+        /* On phones, force any st.columns row that contains 3+ children
+           to wrap onto multiple rows. Streamlit renders columns as
+           horizontal flex containers; without this, a 3-col grid
+           crushes each column to ~110px which is unreadable. The
+           :has(:nth-child(3)) selector means: only target rows with at
+           least 3 columns. 2-col rows (a lot of forms) stay side-by-
+           side because they fit fine on a 390px viewport. iOS 15.4+
+           supports :has(); older Safari just falls through to the old
+           cramped behavior. */
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(3)) {
+            flex-wrap: wrap !important;
+        }
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="column"]:nth-child(3))
+          > [data-testid="column"] {
+            flex: 1 1 100% !important;
+            min-width: 100% !important;
         }
     }
 
