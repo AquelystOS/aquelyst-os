@@ -3673,7 +3673,7 @@ def _inbox_status_fragment():
             if watcher_running:
                 email_responder.stop_responder()
             else:
-                email_responder.start_responder(check_interval_minutes=5, auto_reply_mode='draft')
+                email_responder.start_responder(check_interval_minutes=1, auto_reply_mode='draft')
             st.rerun()
 
     # AUTO-ENGAGEMENT — clickable TOGGLE
@@ -5519,9 +5519,9 @@ def _show_responder_panel():
 
         col1, col2 = st.columns(2)
         with col1:
-            interval = st.slider("Check inbox every N minutes", 2, 60, 5, 1,
-                                  help="Lower = faster reply, more IMAP traffic. "
-                                        "5 min is a good balance.")
+            interval = st.slider("Check inbox every N minutes", 1, 60, 1, 1,
+                                  help="1 min = near-real-time. Higher numbers "
+                                        "= less IMAP traffic but slower replies.")
         with col2:
             mode = st.radio("Reply mode",
                              ["📝 Draft only", "📤 Auto-reply"],
@@ -6111,7 +6111,12 @@ def _show_escalations(all_pending):
                     st.error("No email on file")
                 else:
                     with st.spinner("Sending..."):
-                        success, m = smtp_sender.send_email(to_email, edited_subj, edited)
+                        irt = database.get_latest_inbound_message_id(d['lead_id'])
+                        success, m = smtp_sender.send_email(
+                            to_email, edited_subj, edited,
+                            draft_id=d['id'],
+                            in_reply_to=irt,
+                        )
                         if success:
                             database.approve_draft(d['id'])
                             database.mark_draft_sent(d['id'])
@@ -6442,8 +6447,11 @@ def _show_pending_drafts(pending):
                     st.error("No email on file for this lead")
                 else:
                     with st.spinner("Sending..."):
+                        irt = database.get_latest_inbound_message_id(d['lead_id'])
                         success, msg = smtp_sender.send_email(
-                            to_email, edited_subject, edited_body
+                            to_email, edited_subject, edited_body,
+                            draft_id=d['id'],
+                            in_reply_to=irt,
                         )
                         if success:
                             database.approve_draft(d['id'])
@@ -7014,13 +7022,43 @@ def _render_conversation_thread(thread, lead, key_ns=""):
         if msg['direction'] == 'out':
             # Outgoing message — right side, green
             is_draft = not msg.get('sent')
-            sent_badge = (
-                "<span style='background:#16a34a;color:white;padding:0.1rem 0.5rem;"
-                "border-radius:8px;font-size:0.7rem;font-weight:700;margin-left:0.5rem'>SENT</span>"
-                if msg.get('sent')
-                else "<span style='background:#f59e0b;color:white;padding:0.1rem 0.5rem;"
-                     "border-radius:8px;font-size:0.7rem;font-weight:700;margin-left:0.5rem'>DRAFT</span>"
-            )
+            # Auto-send countdown badge: when a draft has scheduled_send_at
+            # in the future, show "⏱ AUTO-SENDS IN 1:23" instead of just
+            # DRAFT. Joseph asked for this so auto-replies feel less
+            # robotic-fast and more like a thoughtful response.
+            scheduled_iso = msg.get('scheduled_send_at')
+            secs_until_send = None
+            if is_draft and scheduled_iso:
+                try:
+                    from datetime import datetime as _dt
+                    sched_dt = _dt.fromisoformat(str(scheduled_iso).replace('Z', '+00:00'))
+                    if sched_dt.tzinfo is not None:
+                        sched_dt = sched_dt.replace(tzinfo=None)
+                    delta = (sched_dt - _dt.utcnow()).total_seconds()
+                    if delta > 0:
+                        secs_until_send = int(delta)
+                except Exception:
+                    secs_until_send = None
+            if msg.get('sent'):
+                sent_badge = (
+                    "<span style='background:#16a34a;color:white;padding:0.1rem 0.5rem;"
+                    "border-radius:8px;font-size:0.7rem;font-weight:700;margin-left:0.5rem'>SENT</span>"
+                )
+            elif secs_until_send is not None:
+                mins = secs_until_send // 60
+                secs = secs_until_send % 60
+                sent_badge = (
+                    f"<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
+                    f"color:#0a0f1c;padding:0.1rem 0.55rem;border-radius:8px;"
+                    f"font-size:0.7rem;font-weight:700;margin-left:0.5rem' "
+                    f"title='Auto-sends when the timer hits zero. Hit Send Now to fire it instantly, or Cancel timer to keep it as a draft.'>"
+                    f"⏱ AUTO-SENDS IN {mins}:{secs:02d}</span>"
+                )
+            else:
+                sent_badge = (
+                    "<span style='background:#f59e0b;color:white;padding:0.1rem 0.5rem;"
+                    "border-radius:8px;font-size:0.7rem;font-weight:700;margin-left:0.5rem'>DRAFT</span>"
+                )
 
             mtype = (msg.get('message_type') or 'email').replace('_', ' ').title()
 
@@ -7052,7 +7090,17 @@ def _render_conversation_thread(thread, lead, key_ns=""):
             except (KeyError, TypeError, IndexError):
                 lead_email = None
             if is_draft and lead_email:
-                _spc, b1, b2, b3 = st.columns([1, 1, 1, 1])
+                if secs_until_send is not None:
+                    # Scheduled-send draft: 4-button row with Cancel timer
+                    b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
+                    if b4.button("⏹ Cancel timer",
+                                  key=f"thread_canceltimer_{key_ns}_{msg['id']}",
+                                  use_container_width=True,
+                                  help="Stop the auto-send countdown. Draft will stay pending for manual review."):
+                        database.cancel_scheduled_send(msg['id'])
+                        st.rerun()
+                else:
+                    _spc, b1, b2, b3 = st.columns([1, 1, 1, 1])
                 if b1.button("📤 Send Now", type="primary", key=f"thread_send_{key_ns}_{msg['id']}",
                               use_container_width=True):
                     if smtp_sender.is_configured():
@@ -7060,8 +7108,11 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                             st.error("Email is on suppression list.")
                         else:
                             with st.spinner("Sending..."):
+                                irt = database.get_latest_inbound_message_id(lead['id'])
                                 ok, send_msg = smtp_sender.send_email(
-                                    lead['email'], msg['subject'], msg['body']
+                                    lead['email'], msg['subject'], msg['body'],
+                                    draft_id=msg['id'],
+                                    in_reply_to=irt,
                                 )
                                 if ok:
                                     database.approve_draft(msg['id'])

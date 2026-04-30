@@ -350,7 +350,8 @@ def _build_can_spam_footer(to_email, plain=True):
 
 
 def send_email(to_email, subject, body, body_html=None, reply_to=None,
-                tracking_pixel_url=None, draft_id=None):
+                tracking_pixel_url=None, draft_id=None,
+                in_reply_to=None, references=None):
     """
     Send email via configured SMTP for the CURRENTLY LOGGED-IN user.
     Returns (success, message).
@@ -359,10 +360,31 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
     a clear message. We never silently borrow another user's SMTP — that
     was the bug that masqueraded Danielle's emails as Joseph's.
 
+    Threading parameters (added 2026-04-30 — Joseph's testing exposed
+    Aqua's replies showing up as NEW emails in the prospect's inbox
+    instead of as proper replies in the existing thread):
+      • in_reply_to: the RFC Message-ID of the email we're replying to
+        (with or without angle brackets — we normalize). Sets the
+        In-Reply-To header.
+      • references: a string or list of prior Message-IDs in this
+        thread. Sets the References header. If None and in_reply_to
+        is set, we use in_reply_to as the references value.
+
     Every send also gets a CAN-SPAM compliant footer (physical address +
     one-click unsubscribe link) appended automatically. Required by US
     federal law for commercial email, and protects domain reputation.
     """
+    def _bracket(mid):
+        if not mid:
+            return ''
+        s = str(mid).strip()
+        if not s:
+            return ''
+        if not s.startswith('<'):
+            s = '<' + s
+        if not s.endswith('>'):
+            s = s + '>'
+        return s
     user_email = _current_user_email()
     config = load_smtp_config()
     if not config:
@@ -390,9 +412,32 @@ def send_email(to_email, subject, body, body_html=None, reply_to=None,
         sender = f"{config['sender_name']} <{config['email']}>" if config.get('sender_name') else config['email']
         msg['From'] = sender
         msg['To'] = to_email
-        msg['Subject'] = subject
+        # Force "Re:" prefix when this is a reply so Gmail/Outlook thread
+        # it correctly even if the LLM forgot. Don't double-prefix.
+        normalized_subject = subject or ''
+        if in_reply_to and not normalized_subject.lower().lstrip().startswith('re:'):
+            normalized_subject = f"Re: {normalized_subject}"
+        msg['Subject'] = normalized_subject
         msg['Date'] = formatdate(localtime=True)
         msg['Message-ID'] = make_msgid()
+        # Threading headers — the difference between "appears as a reply
+        # in the prospect's existing thread" and "appears as a brand-new
+        # cold email." Without these, Gmail/Outlook show the response
+        # as an unrelated new conversation.
+        irt = _bracket(in_reply_to)
+        if irt:
+            msg['In-Reply-To'] = irt
+            if references:
+                if isinstance(references, (list, tuple)):
+                    refs = ' '.join(_bracket(r) for r in references if r)
+                else:
+                    refs = _bracket(references)
+                # Always include the in-reply-to at the end of References
+                if irt not in refs:
+                    refs = (refs + ' ' + irt).strip()
+                msg['References'] = refs
+            else:
+                msg['References'] = irt
         # CAN-SPAM also calls out List-Unsubscribe header support — modern
         # mail clients render a one-click button when this header is present.
         import urllib.parse as _up

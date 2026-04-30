@@ -307,6 +307,13 @@ def init_db():
         col_def = 'INTEGER DEFAULT 0' if col != 'last_used_at' else 'TEXT'
         _safe_add_column(c, 'provider_connection_log', col, col_def)
 
+    # Scheduled-send column for the auto-engagement countdown timer.
+    # When auto_send is on, drafts get scheduled with a randomized 60-180s
+    # delay instead of firing instantly, so replies don't read as
+    # robotic-fast AI. The drain loop dispatches drafts whose
+    # scheduled_send_at <= NOW.
+    _safe_add_column(c, 'outreach_drafts', 'scheduled_send_at', 'TEXT')
+
     # Per-user attribution columns (added 2026-04-28 — multi-tenancy audit).
     # Each row gets stamped with the team member who created/sent it so two
     # users' Aquas can't blindly double-contact the same lead and so admin
@@ -1242,9 +1249,16 @@ def get_conversation_thread(lead_id):
     conn = get_connection()
     c = conn.cursor()
 
-    # Outbound: sent drafts + pending drafts
-    c.execute('''SELECT id, message_type, subject, content, created_at, sent, approved
-                 FROM outreach_drafts WHERE lead_id = ?''', (lead_id,))
+    # Outbound: sent drafts + pending drafts. scheduled_send_at lets the
+    # UI render a countdown timer for auto-replies that haven't fired yet.
+    try:
+        c.execute('''SELECT id, message_type, subject, content, created_at, sent,
+                            approved, scheduled_send_at
+                     FROM outreach_drafts WHERE lead_id = ?''', (lead_id,))
+    except Exception:
+        # Older schema without scheduled_send_at
+        c.execute('''SELECT id, message_type, subject, content, created_at, sent, approved
+                     FROM outreach_drafts WHERE lead_id = ?''', (lead_id,))
     outbound = c.fetchall()
 
     # Inbound: messages received from the lead
@@ -1257,6 +1271,16 @@ def get_conversation_thread(lead_id):
 
     thread = []
     for d in outbound:
+        # Tolerate rows that don't have the scheduled_send_at column yet
+        try:
+            sched = d['scheduled_send_at'] if isinstance(d, dict) else None
+            if not isinstance(d, dict):
+                try:
+                    sched = d['scheduled_send_at']
+                except (KeyError, IndexError, TypeError):
+                    sched = None
+        except Exception:
+            sched = None
         thread.append({
             'direction': 'out',
             'id': d['id'],
@@ -1266,6 +1290,7 @@ def get_conversation_thread(lead_id):
             'message_type': d['message_type'] or '',
             'sent': bool(d['sent']),
             'approved': bool(d['approved']),
+            'scheduled_send_at': sched,
         })
 
     for m in inbound:
@@ -2081,6 +2106,156 @@ def _learn_from_draft_discard(draft_row):
                                'count': n})
     except Exception:
         pass
+
+
+def schedule_draft_send(draft_id, send_at_iso):
+    """Set scheduled_send_at on a draft so the auto-engagement drain
+    fires it when its time arrives. Used to add a natural delay so
+    auto-replies don't read as robotic-fast."""
+    if not draft_id or not send_at_iso:
+        return
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('UPDATE outreach_drafts SET scheduled_send_at = ? WHERE id = ?',
+                  (send_at_iso, draft_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cancel_scheduled_send(draft_id):
+    """User clicked Cancel on a scheduled-send draft — clear the timer
+    so it stays in the queue for manual review instead of auto-firing."""
+    if not draft_id:
+        return
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('UPDATE outreach_drafts SET scheduled_send_at = NULL WHERE id = ?',
+                  (draft_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_unanswered_inbound(limit=50):
+    """Catch-up scanner: every inbound message that doesn't have an
+    outbound reply newer than itself. Lets Aqua spot prospects waiting
+    on us that fell through the cracks (watcher down, draft still
+    pending, manual reply forgotten).
+
+    Returns list of {lead_id, business_name, email, inbound_id,
+    inbound_subject, inbound_received_at, inbound_intent, days_waiting}
+    sorted oldest-waiting first (squeakiest wheel).
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # For every inbound, find the latest outbound to that lead.
+        # If no outbound exists OR the latest outbound is older than
+        # the inbound, this prospect is waiting on us.
+        c.execute('''
+            SELECT i.id AS inbound_id, i.lead_id, i.subject AS inbound_subject,
+                   i.received_at AS inbound_received_at, i.intent AS inbound_intent,
+                   l.business_name, l.email,
+                   (SELECT MAX(d.created_at) FROM outreach_drafts d
+                     WHERE d.lead_id = i.lead_id AND d.sent = 1) AS last_sent_at
+            FROM inbound_messages i
+            LEFT JOIN leads l ON l.id = i.lead_id
+            WHERE i.lead_id IS NOT NULL
+              AND COALESCE(i.is_junk, 0) = 0
+              AND COALESCE(i.intent, '') NOT IN ('unsubscribe', 'auto_reply')
+            ORDER BY i.received_at DESC
+        ''')
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    waiting = []
+    seen_leads = set()
+    from datetime import datetime as _dt
+    try:
+        from email.utils import parsedate_to_datetime as _rfc_parse
+    except ImportError:
+        _rfc_parse = None
+
+    def _parse_ts(raw):
+        if not raw:
+            return None
+        try:
+            return _dt.fromisoformat(str(raw).replace('Z', '+00:00')).replace(tzinfo=None)
+        except Exception:
+            pass
+        if _rfc_parse:
+            try:
+                dt = _rfc_parse(str(raw))
+                if dt:
+                    return dt.replace(tzinfo=None)
+            except Exception:
+                pass
+        return None
+
+    for r in rows:
+        # One entry per lead — the most recent inbound is the one we
+        # owe a response to (they may have replied multiple times).
+        lead_id = r['lead_id'] if isinstance(r, dict) else r[1]
+        if lead_id in seen_leads:
+            continue
+        seen_leads.add(lead_id)
+
+        in_ts = _parse_ts(r['inbound_received_at'] if isinstance(r, dict)
+                          else r[3])
+        out_ts = _parse_ts(r['last_sent_at'] if isinstance(r, dict)
+                           else r[7])
+
+        # If we replied AFTER the inbound, this thread is up-to-date
+        if out_ts and in_ts and out_ts > in_ts:
+            continue
+
+        days_waiting = None
+        if in_ts:
+            days_waiting = (_dt.utcnow() - in_ts).total_seconds() / 86400.0
+
+        waiting.append({
+            'lead_id': lead_id,
+            'business_name': r['business_name'] if isinstance(r, dict) else r[5],
+            'email': r['email'] if isinstance(r, dict) else r[6],
+            'inbound_id': r['inbound_id'] if isinstance(r, dict) else r[0],
+            'inbound_subject': r['inbound_subject'] if isinstance(r, dict) else r[2],
+            'inbound_received_at': r['inbound_received_at'] if isinstance(r, dict) else r[3],
+            'inbound_intent': r['inbound_intent'] if isinstance(r, dict) else r[4],
+            'days_waiting': days_waiting,
+        })
+
+    # Squeaky wheel first — biggest days_waiting at the top
+    waiting.sort(key=lambda w: -(w.get('days_waiting') or 0))
+    return waiting[:limit]
+
+
+def get_latest_inbound_message_id(lead_id):
+    """Return the RFC Message-ID of the most recent inbound message
+    from this lead, or None. Used by manual-send paths so the outgoing
+    email is properly threaded as a reply (In-Reply-To header) instead
+    of appearing as a fresh new conversation in the prospect's inbox."""
+    if not lead_id:
+        return None
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            'SELECT message_id_rfc FROM inbound_messages '
+            'WHERE lead_id = ? AND message_id_rfc IS NOT NULL '
+            'ORDER BY id DESC LIMIT 1', (lead_id,))
+        row = c.fetchone()
+        if not row:
+            return None
+        try:
+            return row['message_id_rfc']
+        except Exception:
+            return row[0] if row else None
+    finally:
+        conn.close()
 
 
 def delete_draft(draft_id):

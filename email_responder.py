@@ -743,23 +743,25 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                details={'lead_id': lead['id'], 'draft_id': draft_id, 'source': reply['source']})
 
     if auto_send:
-        # Approve and send immediately
+        # Approve, then SCHEDULE the send 60-180s out instead of firing
+        # immediately. Joseph asked for a natural-feeling delay so
+        # auto-replies don't read as robotic-fast AI: "put a launch
+        # timer next to the draft that counts down and then auto sends
+        # the reply." The drain loop in auto_engagement picks up
+        # scheduled drafts whose time has come, with proper threading.
         database.approve_draft(draft_id)
-        success, send_msg = smtp_sender.send_email(
-            lead['email'], reply['subject'], reply['body']
-        )
-        if success:
-            database.mark_draft_sent(draft_id)
-            database.log_activity(lead['id'], 'auto_reply_sent',
-                                   f"Auto-replied via NEPQ bot: {reply['subject'][:40]}")
-            increment_stat('replies_auto_sent')
-            log_event('sent',
-                       f"📤 Auto-sent reply to {lead['business_name']}",
-                       details={'lead_id': lead['id']})
-        else:
-            log_event('error',
-                       f"Failed to send auto-reply to {lead['business_name']}: {send_msg}")
-            increment_stat('errors')
+        import random as _random
+        from datetime import datetime as _dt, timedelta as _td
+        delay_sec = _random.randint(60, 180)
+        send_at = (_dt.utcnow() + _td(seconds=delay_sec)).isoformat()
+        database.schedule_draft_send(draft_id, send_at)
+        database.log_activity(lead['id'], 'auto_reply_scheduled',
+                               f"⏱ Auto-reply scheduled in {delay_sec}s: {reply['subject'][:40]}")
+        log_event('scheduled',
+                   f"⏱ Auto-reply scheduled for {lead['business_name']} "
+                   f"(in {delay_sec}s)",
+                   details={'lead_id': lead['id'], 'draft_id': draft_id,
+                            'delay_sec': delay_sec})
 
     _mark_processed()
     return draft_id
@@ -865,15 +867,15 @@ def responder_loop():
             time.sleep(5)
 
 
-def start_responder(check_interval_minutes=5, auto_reply_mode='draft'):
+def start_responder(check_interval_minutes=1, auto_reply_mode='draft'):
     """Start the inbox poller in a background thread.
 
-    Default interval lowered from 30 → 5 minutes per Joseph's testing
-    (2026-04-30): a 30-minute polling cadence meant prospects' replies
-    sat unread for half an hour, defeating the point of an auto-watcher.
-    5 minutes is a reasonable balance between responsiveness and IMAP
-    politeness (Gmail allows ~80 connections per minute per IP — at
-    one user polling every 5 min we're at 0.2/min).
+    Default interval lowered to 1 minute (was 5, originally 30) per
+    Joseph's iterative testing — he wants near-real-time visibility
+    into replies. Gmail/IMAP at 1 conn/min is well inside the polite
+    range (~80 conn/min/IP allowance). The watcher self-paces with
+    the IMAP server's UID-based 'unseen since last check' so we
+    don't refetch the same messages.
     """
     state = get_state()
     if state.get('running'):

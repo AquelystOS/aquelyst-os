@@ -478,6 +478,150 @@ def engage_lead_followup(lead, auto_send=False):
         return draft_id
 
 
+def catch_up_unanswered_threads(max_per_run=5, auto_send=False):
+    """Scan our own inbox for prospects who replied but never got an
+    answer back, and draft (or send) a fresh NEPQ reply that responds
+    to the inbound with full thread context.
+
+    Two failure modes this fixes:
+      • Inbox watcher was down / restarted while replies came in →
+        those replies have no draft attached. Catch up.
+      • Reply was drafted but the human approver never sent it →
+        upgrade to auto-send (only when auto_send=True) so the
+        conversation doesn't go cold for days.
+
+    Skips: leads on suppression, opted-out leads, junk-marked inbounds,
+    inbounds we already drafted a reply to within the last 24hr (so
+    we don't pile multiple replies on one thread).
+
+    Returns count of new replies (drafted_or_sent_count, skipped_count).
+    """
+    drafted = 0
+    skipped = 0
+    try:
+        unanswered = database.get_unanswered_inbound(limit=max_per_run * 3)
+    except Exception as e:
+        log_event('error', f"catch-up: get_unanswered_inbound failed: {str(e)[:80]}")
+        return 0, 0
+
+    for w in unanswered[:max_per_run]:
+        lead_id = w.get('lead_id')
+        if not lead_id:
+            skipped += 1
+            continue
+
+        lead = database.get_lead(lead_id)
+        if not lead or not lead.get('email'):
+            skipped += 1
+            continue
+        if lead.get('opt_out') or database.is_suppressed(lead['email']):
+            skipped += 1
+            continue
+
+        # Check we don't already have a recent unsent draft for this thread
+        try:
+            existing = database.get_drafts_for_lead(lead_id)
+            from datetime import datetime as _dt, timedelta as _td
+            cutoff = (_dt.utcnow() - _td(hours=24)).isoformat()
+            already_drafted = any(
+                (d.get('message_type') or '').startswith(('auto_reply_to_',
+                                                            'ESCALATED_'))
+                and (d.get('created_at') or '') >= cutoff
+                for d in existing
+            )
+        except Exception:
+            already_drafted = False
+        if already_drafted:
+            skipped += 1
+            continue
+
+        # Pull the inbound body so the reply has real context
+        try:
+            from_email = lead['email']
+            inbound_body = ''
+            conn = database.get_connection()
+            c = conn.cursor()
+            try:
+                c.execute('SELECT body, message_id_rfc FROM inbound_messages '
+                          'WHERE id = ?', (w.get('inbound_id'),))
+                row = c.fetchone()
+                if row:
+                    inbound_body = (row['body'] if isinstance(row, dict)
+                                    else row[0]) or ''
+                    irt_msg_id = (row['message_id_rfc'] if isinstance(row, dict)
+                                  else row[1])
+                else:
+                    irt_msg_id = None
+            finally:
+                conn.close()
+        except Exception:
+            inbound_body = ''
+            irt_msg_id = None
+
+        # Generate a context-aware reply
+        try:
+            conversation = []
+            try:
+                # Pull prior thread for memory
+                conversation = [{
+                    'role': 'assistant' if t.get('direction') == 'out' else 'user',
+                    'content': (t.get('subject') or '') + '\n\n' + (t.get('body') or '')
+                } for t in database.get_conversation_thread(lead_id)[-6:]]
+            except Exception:
+                conversation = []
+
+            reply = nepq_engine.generate_reply_to_inbound(
+                dict(lead), conversation, inbound_body or w.get('inbound_subject') or '')
+        except Exception as e:
+            log_event('error',
+                       f"catch-up: generate_reply failed for {lead.get('business_name')}: {str(e)[:80]}")
+            skipped += 1
+            continue
+
+        # Save as draft, threaded to the original inbound
+        intent = w.get('inbound_intent') or 'question'
+        draft_id = database.add_outreach_draft(
+            lead_id, f'auto_reply_to_{intent}',
+            reply['subject'], reply['body'])
+
+        if auto_send:
+            database.approve_draft(draft_id)
+            try:
+                ok, send_msg = smtp_sender.send_email(
+                    lead['email'], reply['subject'], reply['body'],
+                    draft_id=draft_id, in_reply_to=irt_msg_id)
+            except Exception as e:
+                log_event('error',
+                           f"catch-up: send failed for {lead.get('business_name')}: {str(e)[:80]}")
+                continue
+            if ok:
+                database.mark_draft_sent(draft_id)
+                database.update_lead(lead_id, status='contacted',
+                                      last_contacted=datetime.now().isoformat())
+                database.log_activity(lead_id, 'catch_up_sent',
+                                       f"📤 Caught up on stale thread: {reply['subject'][:50]}")
+                log_event('catch_up',
+                           f"📤 Caught up on stale thread → {lead.get('business_name')} "
+                           f"(waited {w.get('days_waiting', 0):.1f}d)",
+                           details={'lead_id': lead_id, 'draft_id': draft_id})
+                drafted += 1
+            else:
+                log_event('error',
+                           f"catch-up SMTP failed for {lead.get('business_name')}: "
+                           f"{(send_msg or '')[:80]}")
+        else:
+            log_event('catch_up',
+                       f"✍️ Catch-up draft for {lead.get('business_name')} "
+                       f"(waited {w.get('days_waiting', 0):.1f}d)",
+                       details={'lead_id': lead_id, 'draft_id': draft_id})
+            drafted += 1
+
+    if drafted or skipped:
+        log_event('cycle_catchup',
+                   f"🔍 Catch-up: {drafted} replies, {skipped} skipped")
+    return drafted, skipped
+
+
 def drain_pending_auto_drafts(max_per_run=20):
     """Send any unsent autopilot/auto-engagement drafts that are sitting
     in the queue. Skips human-created drafts (compose, manual_send) — those
@@ -497,10 +641,28 @@ def drain_pending_auto_drafts(max_per_run=20):
 
     AUTO_PREFIXES = ('nepq_initial', 'nepq_followup_', 'auto_reply_to_',
                       'aqua_intro', 'ESCALATED_')
+    from datetime import datetime as _dt
+    now_utc = _dt.utcnow()
+
     for d in pending[:max_per_run]:
         msg_type = d.get('message_type') or ''
         if not msg_type.startswith(AUTO_PREFIXES):
             continue  # Leave human compose/manual drafts alone
+
+        # Scheduled-send timer: if scheduled_send_at is set and in the
+        # FUTURE, skip this cycle — the drain on a later cycle will pick
+        # it up when the timer hits zero. If scheduled_send_at <= now
+        # (or is None for legacy drafts), proceed.
+        sched = d.get('scheduled_send_at')
+        if sched:
+            try:
+                sched_dt = _dt.fromisoformat(str(sched).replace('Z', '+00:00'))
+                if sched_dt.tzinfo is not None:
+                    sched_dt = sched_dt.replace(tzinfo=None)
+                if sched_dt > now_utc:
+                    continue  # not time yet — countdown still running
+            except Exception:
+                pass
         lead_id = d.get('lead_id')
         if not lead_id:
             continue
@@ -536,11 +698,19 @@ def drain_pending_auto_drafts(max_per_run=20):
                        details={'lead_id': lead_id, 'draft_id': d['id']})
             continue
 
-        # Send
+        # Send. If this is a reply to an inbound message, look up the
+        # original Message-ID so the email is properly threaded.
+        irt = None
+        try:
+            if msg_type.startswith('auto_reply_to_') or msg_type.startswith('ESCALATED_'):
+                irt = database.get_latest_inbound_message_id(lead_id)
+        except Exception:
+            irt = None
         try:
             success, send_msg = smtp_sender.send_email(
                 lead['email'], d.get('subject') or '',
-                d.get('content') or '', draft_id=d['id'])
+                d.get('content') or '', draft_id=d['id'],
+                in_reply_to=irt)
         except Exception as e:
             log_event('error', f"Drain send failed for {lead['business_name']}: {str(e)[:80]}")
             continue
@@ -575,23 +745,57 @@ def run_one_cycle():
     log_event('cycle_start',
                f"🔄 Engagement cycle: min_score={min_score}, mode={'send' if auto_send else 'draft'}")
 
-    # 0. Drain any pending autopilot drafts FIRST (catches drafts created
-    #    on prior cycles that didn't auto-send for any reason — outside
-    #    business hours then, quality-gated as 'queue' on the previous
-    #    strict policy, etc.)
+    # The engagement loop ticks every 1 min (so scheduled-send timers
+    # fire on time), but we DON'T want to run heavy AI generation 60x
+    # per hour. Two-tier cadence:
+    #   • Cheap work (drain + scheduled dispatch + catch-up) — every tick
+    #   • Heavy work (find new candidates, draft + send) — only when
+    #     ENGAGEMENT_INTERVAL_MIN has elapsed since the last heavy cycle
+    from datetime import datetime as _dt, timedelta as _td
+    ENGAGEMENT_INTERVAL_MIN = config.get('engagement_interval_minutes', 15)
+    last_heavy_iso = state.get('last_heavy_cycle')
+    last_heavy = None
+    if last_heavy_iso:
+        try:
+            last_heavy = _dt.fromisoformat(str(last_heavy_iso).replace('Z', '+00:00'))
+            if last_heavy.tzinfo is not None:
+                last_heavy = last_heavy.replace(tzinfo=None)
+        except Exception:
+            last_heavy = None
+    do_heavy = (last_heavy is None
+                or (_dt.utcnow() - last_heavy) >= _td(minutes=ENGAGEMENT_INTERVAL_MIN))
+
+    # === CHEAP work — every tick ===
+    # 0. Drain pending autopilot drafts (incl. scheduled-send timers
+    #    that just hit zero — this is what makes the countdown timer
+    #    feel responsive on a 1-min loop).
     if auto_send:
         sent_n, blocked_n = drain_pending_auto_drafts(max_per_run=max_per_run * 4)
         if sent_n or blocked_n:
             log_event('cycle_drain',
                        f"📤 Drained pending: sent {sent_n}, blocked {blocked_n}")
 
-    # 1. Engage new hot leads
+    # === HEAVY work — only every ENGAGEMENT_INTERVAL_MIN ===
+    if not do_heavy:
+        return
+
+    update_state(last_heavy_cycle=_dt.utcnow().isoformat())
+
+    # 1. Catch-up: scan inbox for prospects waiting on a reply that
+    #    fell through. Joseph asked for this 2026-04-30.
+    try:
+        catch_up_unanswered_threads(max_per_run=max(2, max_per_run // 2),
+                                     auto_send=auto_send)
+    except Exception as e:
+        log_event('error', f"Catch-up scan failed: {str(e)[:100]}")
+
+    # 2. Engage new hot leads
     candidates = find_engagement_candidates(min_score)
     for lead in candidates[:max_per_run]:
         engage_lead_initial(lead, auto_send=auto_send)
         time.sleep(2)  # Be polite to AI provider
 
-    # 2. Send follow-ups
+    # 3. Send follow-ups
     if fu_enabled:
         followups = find_followup_candidates()
         for lead in followups[:max_per_run]:
@@ -600,7 +804,7 @@ def run_one_cycle():
 
     increment_stat('runs_completed')
     log_event('cycle_done',
-               f"✓ Cycle complete: {len(candidates)} initial candidates, "
+               f"✓ Heavy cycle complete: {len(candidates)} initial candidates, "
                f"{len(followups) if fu_enabled else 0} followups")
 
 
@@ -616,17 +820,48 @@ def engagement_loop():
         except Exception as e:
             log_event('error', f"Loop error: {str(e)[:120]}")
 
-        interval = state.get('config', {}).get('check_interval_minutes', 15)
-        for _ in range(interval * 12):
+        # The loop ticks frequently so the scheduled-send timer feels
+        # responsive (timers are 60-180s; if we slept 15 min between
+        # checks, a 60s timer could appear to wait 15+ min). Default
+        # 1 min = drain runs every minute, scheduled drafts fire within
+        # 60s of their target. Heavy work (find_engagement_candidates,
+        # generate_initial_outreach) is gated by a per-cycle counter
+        # internally so we don't 60x the API budget.
+        interval = state.get('config', {}).get('check_interval_minutes', 1)
+        for _ in range(max(1, interval) * 12):
             if not get_state().get('running', False):
                 return
             time.sleep(5)
 
 
-def start_engagement(min_score=70, auto_send=False, check_interval_minutes=15,
+def start_engagement(min_score=70, auto_send=False, check_interval_minutes=1,
                       max_per_run=5, follow_up_enabled=True):
-    """Start the auto-engagement bot in background."""
+    """Start the auto-engagement bot in background.
+
+    Default check_interval is 1 min so the scheduled-send countdown
+    timers fire on time. Heavy AI work (find candidates, draft) is
+    gated to once per ENGAGEMENT_INTERVAL_MIN (default 15 min) inside
+    the loop — see run_one_cycle.
+    """
     if get_state().get('running'):
+        # Already running — but still apply the link to inbox watcher
+        # if auto_send is on, so flipping the toggle doesn't silently
+        # leave the watcher in draft mode (Joseph's 2026-04-30 trap).
+        if auto_send:
+            try:
+                import email_responder
+                if email_responder.is_running():
+                    email_responder.set_auto_reply_mode('send')
+                else:
+                    try:
+                        email_responder.start_responder(
+                            check_interval_minutes=1,
+                            auto_reply_mode='send',
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         return False, "Already running"
 
     # Pre-flight: if auto_send is on, bail early when no SMTP is connected.
@@ -675,7 +910,7 @@ def start_engagement(min_score=70, auto_send=False, check_interval_minutes=15,
                 # itself can still run.
                 try:
                     email_responder.start_responder(
-                        check_interval_minutes=5,
+                        check_interval_minutes=1,
                         auto_reply_mode='send',
                     )
                 except Exception:
