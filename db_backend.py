@@ -255,13 +255,31 @@ class _PgConnection:
         return c
 
     def commit(self):
-        self._conn.commit()
+        # Connection runs in autocommit mode (set in __init__ and in the
+        # pool getter), so each statement is already its own transaction.
+        # commit() here is a no-op safety net — but psycopg2 still raises
+        # InterfaceError if the underlying TCP connection has died, which
+        # used to crash init_db() on Streamlit Cloud cold starts when a
+        # pooled connection had been silently closed by Supabase. Swallow
+        # InterfaceError / OperationalError specifically; let real errors
+        # surface.
+        try:
+            self._conn.commit()
+        except Exception as e:
+            cls_name = type(e).__name__
+            if cls_name in ('InterfaceError', 'OperationalError'):
+                # Mark for eviction by close() if this is a pooled conn
+                if hasattr(self, '_poisoned'):
+                    self._poisoned = True
+                return
+            raise
 
     def rollback(self):
         try:
             self._conn.rollback()
         except Exception:
-            pass
+            if hasattr(self, '_poisoned'):
+                self._poisoned = True
 
     def close(self):
         try:

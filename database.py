@@ -328,8 +328,17 @@ def init_db():
     ):
         _safe_add_column(c, table, col, 'TEXT')
 
-    conn.commit()
-    conn.close()
+    # Trailing commit is mostly a no-op (autocommit handles each
+    # statement) — but if the connection has been closed by the
+    # pooler mid-init, the bare commit used to crash boot. Guard it.
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 def _current_actor_email():

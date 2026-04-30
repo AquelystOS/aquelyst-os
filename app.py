@@ -45,10 +45,22 @@ st.set_page_config(
 ROOT_ADMIN_EMAIL_LOGIN = 'joseph@aquelyst.com'  # always-allowed root admin
 
 
-# Initialize database BEFORE any login flow — login itself reads from DB
+# Initialize database BEFORE any login flow — login itself reads from DB.
+# Wrapped because a transient DB blip during boot (Supabase pooler closing
+# an idle connection between cold-start phases) used to crash the whole
+# app with an opaque psycopg2 trace. The next page-load retries.
 if "db_initialized" not in st.session_state:
-    database.init_db()
-    st.session_state.db_initialized = True
+    try:
+        database.init_db()
+        st.session_state.db_initialized = True
+    except Exception as _init_err:
+        st.error(
+            "⚠️ Database is taking a moment to wake up. Please refresh in "
+            "a few seconds. (If this persists, check Supabase status or "
+            "the DATABASE_URL secret.)"
+        )
+        st.caption(f"Diagnostic: {type(_init_err).__name__}: {str(_init_err)[:200]}")
+        st.stop()
 
 
 def _check_password():
