@@ -7171,11 +7171,26 @@ def _render_conversation_thread(thread, lead, key_ns=""):
                     if b4.button("⏹ Cancel timer",
                                   key=f"thread_canceltimer_{key_ns}_{msg['id']}",
                                   use_container_width=True,
-                                  help="Stop the auto-send countdown. Draft will stay pending for manual review."):
+                                  help="Stop the auto-send countdown. Draft will stay pending for manual review. You can restart it any time."):
                         database.cancel_scheduled_send(msg['id'])
                         st.rerun()
                 else:
-                    _spc, b1, b2, b3 = st.columns([1, 1, 1, 1])
+                    # Plain draft (timer not running): 4-button row with
+                    # Schedule send so user can start a fresh countdown
+                    # without flipping any global modes. Joseph hit a wall
+                    # where Cancel was one-way; this makes it reversible.
+                    b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
+                    if b4.button("⏱ Schedule send",
+                                  key=f"thread_schedsend_{key_ns}_{msg['id']}",
+                                  use_container_width=True,
+                                  help="Start a 2-minute countdown. The draft auto-sends when the timer hits zero. Hit Cancel timer to abort."):
+                        import random as _r
+                        from datetime import datetime as _dt2, timedelta as _td2
+                        delay = _r.randint(60, 180)
+                        send_at = (_dt2.utcnow() + _td2(seconds=delay)).isoformat()
+                        database.approve_draft(msg['id'])
+                        database.schedule_draft_send(msg['id'], send_at)
+                        st.rerun()
                 if b1.button("📤 Send Now", type="primary", key=f"thread_send_{key_ns}_{msg['id']}",
                               use_container_width=True):
                     if smtp_sender.is_configured():
