@@ -865,8 +865,16 @@ def responder_loop():
             time.sleep(5)
 
 
-def start_responder(check_interval_minutes=30, auto_reply_mode='draft'):
-    """Start the inbox poller in a background thread."""
+def start_responder(check_interval_minutes=5, auto_reply_mode='draft'):
+    """Start the inbox poller in a background thread.
+
+    Default interval lowered from 30 → 5 minutes per Joseph's testing
+    (2026-04-30): a 30-minute polling cadence meant prospects' replies
+    sat unread for half an hour, defeating the point of an auto-watcher.
+    5 minutes is a reasonable balance between responsiveness and IMAP
+    politeness (Gmail allows ~80 connections per minute per IP — at
+    one user polling every 5 min we're at 0.2/min).
+    """
     state = get_state()
     if state.get('running'):
         return False, "Already running"
@@ -883,6 +891,19 @@ def start_responder(check_interval_minutes=30, auto_reply_mode='draft'):
 
     log_event('system', f"🚀 Email responder started ({auto_reply_mode} mode, every {check_interval_minutes}min)")
     return True, "Started"
+
+
+def set_auto_reply_mode(mode):
+    """Flip auto_reply_mode without restarting the watcher. Used when
+    auto-engagement is toggled (auto-send ON should also flip the inbox
+    watcher to auto-reply, not just queue drafts)."""
+    if mode not in ('draft', 'send'):
+        return False
+    if not get_state().get('running'):
+        return False
+    update_state(auto_reply_mode=mode)
+    log_event('system', f"🔄 Inbox watcher mode changed to {mode}")
+    return True
 
 
 def stop_responder():

@@ -5363,7 +5363,31 @@ def _show_engagement_panel():
                 "Aqua is generating drafts but every send is being blocked. "
                 "Go to **Setup → 📧 Email** and connect your account, then come back."
             )
-        elif is_auto_send and drafted >= 5 and sent == 0:
+        elif is_auto_send:
+            # Make the linkage to the inbox watcher visible — when auto-send
+            # is on, inbound replies should also auto-reply (not pile up
+            # drafts). The link is enforced in start_engagement.
+            watcher_mode = email_responder.get_state().get('auto_reply_mode', 'draft')
+            watcher_running = email_responder.is_running()
+            if watcher_running and watcher_mode == 'send':
+                st.success(
+                    "🔗 **Linked:** Inbox Watcher is also auto-replying. "
+                    "Inbound replies will be drafted AND sent automatically."
+                )
+            elif watcher_running and watcher_mode != 'send':
+                st.warning(
+                    "⚠️ **Inbox Watcher is in DRAFT mode** — inbound replies "
+                    "will be drafted but not auto-sent. Open Sales Bot → "
+                    "Inbox Watcher and switch to Auto-reply for fully "
+                    "autonomous replies."
+                )
+            else:
+                st.info(
+                    "ℹ️ **Inbox Watcher isn't running yet** — start it from "
+                    "Sales Bot → Inbox Watcher so prospect replies get "
+                    "answered. (Auto-engagement only handles outbound.)"
+                )
+        if is_auto_send and drafted >= 5 and sent == 0:
             st.warning(
                 f"⚠️ **{drafted} drafts created, 0 sent.** Likely your SMTP "
                 "auth is failing on every attempt. Hit **Setup → 📧 Email** → "
@@ -5495,7 +5519,9 @@ def _show_responder_panel():
 
         col1, col2 = st.columns(2)
         with col1:
-            interval = st.slider("Check inbox every N minutes", 5, 120, 30, 5)
+            interval = st.slider("Check inbox every N minutes", 2, 60, 5, 1,
+                                  help="Lower = faster reply, more IMAP traffic. "
+                                        "5 min is a good balance.")
         with col2:
             mode = st.radio("Reply mode",
                              ["📝 Draft only", "📤 Auto-reply"],

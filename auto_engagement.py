@@ -659,6 +659,30 @@ def start_engagement(min_score=70, auto_send=False, check_interval_minutes=15,
     thread = threading.Thread(target=engagement_loop, daemon=True)
     thread.start()
 
+    # Link to inbox watcher: in true autopilot mode (auto-send ON), inbound
+    # replies should also auto-reply, not just queue drafts. Otherwise the
+    # user toggles "Aqua autopilot" thinking it's end-to-end and finds her
+    # politely drafting responses to every reply for them to manually
+    # approve. Joseph's 2026-04-30 testing flagged this confusion.
+    if auto_send:
+        try:
+            import email_responder
+            if email_responder.is_running():
+                email_responder.set_auto_reply_mode('send')
+            else:
+                # Auto-start the watcher in send mode if it wasn't running.
+                # Skip silently on failure (e.g. no IMAP cred) — auto-engagement
+                # itself can still run.
+                try:
+                    email_responder.start_responder(
+                        check_interval_minutes=5,
+                        auto_reply_mode='send',
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     log_event('system', f"🚀 Auto-engagement started "
               f"({'auto-send' if auto_send else 'draft-only'} mode, "
               f"min_score={min_score})")

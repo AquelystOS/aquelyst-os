@@ -1284,13 +1284,38 @@ def get_conversation_thread(lead_id):
         })
 
     # Sort chronologically (oldest first — like chat history).
-    # Normalize timestamps so naive UTC and aware datetimes sort correctly.
+    # Outbound `created_at` is ISO ("2026-04-30T09:15:57"), inbound
+    # `received_at` from IMAP is often RFC 2822 ("Wed, 30 Apr 2026
+    # 09:15:16 -0400"). A naive string sort puts "Wed,..." AFTER any
+    # ISO string ('W' > '2'), which scrambled threads — Joseph's
+    # 2026-04-30 testing surfaced this: the AI draft appeared BEFORE
+    # the inbound message it was replying to. Fix: normalize every
+    # timestamp into a real datetime.
+    from datetime import datetime as _dt
+    try:
+        from email.utils import parsedate_to_datetime as _rfc_parse
+    except ImportError:
+        _rfc_parse = None
     def _sort_key(item):
-        ts = item.get('timestamp', '') or ''
-        # Strip timezone marker for consistent sorting (all stored as UTC)
-        if 'T' in ts and ('+' in ts or 'Z' in ts):
-            ts = ts.split('+')[0].rstrip('Z')
-        return ts
+        raw = item.get('timestamp', '') or ''
+        if not raw:
+            return _dt.min
+        # Try ISO first (most common for our outbound + most modern inbound)
+        try:
+            return _dt.fromisoformat(str(raw).replace('Z', '+00:00')).replace(tzinfo=None)
+        except Exception:
+            pass
+        # Fall back to RFC 2822 (raw IMAP Date: headers)
+        if _rfc_parse:
+            try:
+                dt = _rfc_parse(str(raw))
+                if dt:
+                    return dt.replace(tzinfo=None)
+            except Exception:
+                pass
+        # Last resort: epoch — won't crash the sort, just dumps unparseable
+        # rows at the bottom. Better than mis-ordering them above real data.
+        return _dt.min
     thread.sort(key=_sort_key)
     return thread
 
