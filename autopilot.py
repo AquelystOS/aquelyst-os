@@ -286,13 +286,27 @@ def is_already_in_crm(website_url, business_name=None, city=None, state=None):
                     continue
                 if _normalize_business_name(l['business_name']) != norm_target:
                     continue
-                # Same name — confirm with city/state if we have them.
-                # Skip the city/state check if the candidate didn't
-                # provide them (early discovery often hasn't enriched yet).
-                if city and l['city'] and city.lower() != (l['city'] or '').lower():
-                    continue
-                if state and l['state'] and state.lower() != (l['state'] or '').lower():
-                    continue
+                # Same normalized name. We use city+state to disambiguate
+                # legitimately-different businesses that happen to share
+                # a name (Smith Farm in TX vs Smith Farm in VT).
+                # Audit caught a null-handling bug in the previous code:
+                # if EITHER side had a null city, the check skipped and
+                # we'd merge unrelated leads. Now we treat "candidate
+                # has city, stored has none" (or vice versa) as a
+                # MISMATCH, not a free pass — safer to keep two records
+                # than to silently merge two different businesses.
+                cand_city = (city or '').strip().lower()
+                cand_state = (state or '').strip().lower()
+                stored_city = (l['city'] or '').strip().lower()
+                stored_state = (l['state'] or '').strip().lower()
+                # If we have any location data on either side, require
+                # a positive match to call it a duplicate.
+                if cand_city or stored_city:
+                    if cand_city != stored_city:
+                        continue
+                if cand_state or stored_state:
+                    if cand_state != stored_state:
+                        continue
                 return True
 
     return False

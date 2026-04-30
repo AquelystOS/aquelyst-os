@@ -2117,6 +2117,64 @@ def _learn_from_draft_discard(draft_row):
         pass
 
 
+def next_fifo_send_slot(min_gap_seconds=60, jitter_max=30):
+    """Return the next scheduled_send_at that's at least `min_gap_seconds`
+    after the latest already-scheduled draft AND at least `min_gap_seconds`
+    from now.
+
+    This makes auto-reply timers STACK in FIFO order instead of all
+    firing at the same random offset. Joseph's 2026-04-30 directive:
+    'auto reply times are all set to the same launch time they should
+    all be set one minute apart and stacked so the next email goes out
+    in the order it was received.'
+
+    Returns an ISO string suitable for schedule_draft_send.
+
+    `jitter_max` adds a small random tail (default 0-30s) so multiple
+    sends scheduled in the same second don't fire at exactly the same
+    millisecond — keeps cadence natural without breaking the 1-min FIFO
+    spacing.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    import random as _random
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute(
+            "SELECT scheduled_send_at FROM outreach_drafts "
+            "WHERE sent = 0 AND scheduled_send_at IS NOT NULL "
+            "ORDER BY scheduled_send_at DESC LIMIT 1"
+        )
+        row = c.fetchone()
+    except Exception:
+        row = None
+    finally:
+        conn.close()
+
+    latest_dt = None
+    if row:
+        try:
+            raw = row['scheduled_send_at'] if isinstance(row, dict) else row[0]
+        except Exception:
+            raw = None
+        if raw:
+            try:
+                latest_dt = _dt.fromisoformat(str(raw).replace('Z', '+00:00'))
+                if latest_dt.tzinfo is not None:
+                    latest_dt = latest_dt.replace(tzinfo=None)
+            except Exception:
+                latest_dt = None
+
+    now = _dt.utcnow()
+    floor = now + _td(seconds=min_gap_seconds)
+    if latest_dt and latest_dt > floor:
+        target = latest_dt + _td(seconds=min_gap_seconds)
+    else:
+        target = floor
+    target += _td(seconds=_random.randint(0, max(0, jitter_max)))
+    return target.isoformat()
+
+
 def schedule_draft_send(draft_id, send_at_iso):
     """Set scheduled_send_at on a draft so the auto-engagement drain
     fires it when its time arrives. Used to add a natural delay so

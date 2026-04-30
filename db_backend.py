@@ -293,11 +293,16 @@ class _PgConnection:
             raise
 
     def rollback(self):
+        # Mark the connection poisoned on InterfaceError/OperationalError
+        # so close() returns it to the pool with close=True (eviction).
+        # Previous version had a hasattr check that always passed (the
+        # attribute is set in __init__) and never actually toggled the
+        # flag — caught by audit. Now sets _poisoned=True explicitly
+        # whenever the rollback fails.
         try:
             self._conn.rollback()
         except Exception:
-            if hasattr(self, '_poisoned'):
-                self._poisoned = True
+            self._poisoned = True
 
     def close(self):
         try:

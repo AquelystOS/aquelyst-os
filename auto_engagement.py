@@ -365,32 +365,35 @@ def engage_lead_initial(lead, auto_send=False):
                                 'score': review['score']})
 
     if auto_send:
-        # SCHEDULE the send with the configured natural-delay window
-        # instead of firing immediately. Joseph's UX rule: every auto-
-        # send goes through a countdown so prospects don't get a
-        # robotic-fast reply. The drain loop dispatches when the
-        # timer hits zero.
+        # FIFO scheduling — each new auto-engagement send lands at
+        # least min_delay seconds AFTER the latest already-scheduled
+        # draft, so bursts queue up 1-min apart instead of overlapping.
         database.approve_draft(draft_id)
         try:
             import aqua as _aqua
             _cfg = _aqua.load_config()
             min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
-            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
         except Exception:
-            min_d, max_d = 60, 180
-        import random as _random
-        from datetime import timedelta as _td
-        delay_sec = _random.randint(min_d, max_d)
-        send_at = (datetime.utcnow() + _td(seconds=delay_sec)).isoformat()
+            min_d = 60
+        send_at = database.next_fifo_send_slot(
+            min_gap_seconds=min_d, jitter_max=30)
         database.schedule_draft_send(draft_id, send_at)
-        database.update_lead(lead['id'], status='drafted')  # countdown not yet sent
+        database.update_lead(lead['id'], status='drafted')
+        from datetime import datetime as _dt2
+        try:
+            sched_dt = _dt2.fromisoformat(send_at.replace('Z', '+00:00'))
+            if sched_dt.tzinfo is not None:
+                sched_dt = sched_dt.replace(tzinfo=None)
+            delay_sec = max(0, int((sched_dt - _dt2.utcnow()).total_seconds()))
+        except Exception:
+            delay_sec = min_d
         database.log_activity(lead['id'], 'auto_engagement_scheduled',
-                               f"⏱ NEPQ initial scheduled in {delay_sec}s")
+                               f"⏱ NEPQ initial scheduled in {delay_sec}s (FIFO slot)")
         increment_stat('initial_emails_drafted')
         log_event('scheduled',
-                   f"⏱ Initial NEPQ scheduled → {lead['business_name']} (in {delay_sec}s)",
+                   f"⏱ Initial NEPQ scheduled → {lead['business_name']} (in {delay_sec}s, FIFO)",
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
-                            'delay_sec': delay_sec})
+                            'delay_sec': delay_sec, 'scheduled_for': send_at})
         return draft_id
     else:
         # Just drafted — needs human approval
@@ -503,29 +506,33 @@ def engage_lead_followup(lead, auto_send=False):
                                 'score': review['score']})
 
     if auto_send:
-        # Schedule with the configured natural-delay window. Followups
-        # ride the same countdown plumbing as initials and inbound
-        # auto-replies so the user sees one consistent UX.
+        # FIFO scheduling — slots into the same queue as initials and
+        # inbound auto-replies, 1 min after the latest scheduled draft.
         database.approve_draft(draft_id)
         try:
             import aqua as _aqua
             _cfg = _aqua.load_config()
             min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
-            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
         except Exception:
-            min_d, max_d = 60, 180
-        import random as _random
-        from datetime import timedelta as _td
-        delay_sec = _random.randint(min_d, max_d)
-        send_at = (datetime.utcnow() + _td(seconds=delay_sec)).isoformat()
+            min_d = 60
+        send_at = database.next_fifo_send_slot(
+            min_gap_seconds=min_d, jitter_max=30)
         database.schedule_draft_send(draft_id, send_at)
+        from datetime import datetime as _dt3
+        try:
+            sched_dt = _dt3.fromisoformat(send_at.replace('Z', '+00:00'))
+            if sched_dt.tzinfo is not None:
+                sched_dt = sched_dt.replace(tzinfo=None)
+            delay_sec = max(0, int((sched_dt - _dt3.utcnow()).total_seconds()))
+        except Exception:
+            delay_sec = min_d
         database.log_activity(lead['id'], 'auto_followup_scheduled',
-                               f"⏱ Followup #{touch_number} scheduled in {delay_sec}s")
+                               f"⏱ Followup #{touch_number} scheduled in {delay_sec}s (FIFO slot)")
         increment_stat('followups_drafted')
         log_event('scheduled',
-                   f"⏱ Followup #{touch_number} scheduled → {lead['business_name']} (in {delay_sec}s)",
+                   f"⏱ Followup #{touch_number} scheduled → {lead['business_name']} (in {delay_sec}s, FIFO)",
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
-                            'delay_sec': delay_sec})
+                            'delay_sec': delay_sec, 'scheduled_for': send_at})
         return draft_id
 
     # Legacy non-auto-send path retained below for completeness; the
@@ -558,6 +565,15 @@ def engage_lead_followup(lead, auto_send=False):
         log_event('drafted', f"✍️ Drafted followup #{touch_number} for {lead['business_name']}",
                    details={'lead_id': lead['id'], 'draft_id': draft_id})
         return draft_id
+
+
+def _aqua_load_cfg():
+    """Cheap wrapper so catch-up + drain don't have to re-import aqua."""
+    try:
+        import aqua
+        return aqua.load_config()
+    except Exception:
+        return {}
 
 
 def catch_up_unanswered_threads(max_per_run=5, auto_send=False):
@@ -667,30 +683,24 @@ def catch_up_unanswered_threads(max_per_run=5, auto_send=False):
             reply['subject'], reply['body'])
 
         if auto_send:
+            # Schedule into the FIFO queue (don't immediate-send) so
+            # catch-up replies stack with regular auto-replies and
+            # don't blast at once.
             database.approve_draft(draft_id)
             try:
-                ok, send_msg = smtp_sender.send_email(
-                    lead['email'], reply['subject'], reply['body'],
-                    draft_id=draft_id, in_reply_to=irt_msg_id)
-            except Exception as e:
-                log_event('error',
-                           f"catch-up: send failed for {lead.get('business_name')}: {str(e)[:80]}")
-                continue
-            if ok:
-                database.mark_draft_sent(draft_id)
-                database.update_lead(lead_id, status='contacted',
-                                      last_contacted=datetime.now().isoformat())
-                database.log_activity(lead_id, 'catch_up_sent',
-                                       f"📤 Caught up on stale thread: {reply['subject'][:50]}")
-                log_event('catch_up',
-                           f"📤 Caught up on stale thread → {lead.get('business_name')} "
-                           f"(waited {w.get('days_waiting', 0):.1f}d)",
-                           details={'lead_id': lead_id, 'draft_id': draft_id})
-                drafted += 1
-            else:
-                log_event('error',
-                           f"catch-up SMTP failed for {lead.get('business_name')}: "
-                           f"{(send_msg or '')[:80]}")
+                _cfg2 = _aqua_load_cfg()
+                min_d = max(5, int(_cfg2.get('send_delay_min_sec', 60)))
+            except Exception:
+                min_d = 60
+            send_at = database.next_fifo_send_slot(
+                min_gap_seconds=min_d, jitter_max=30)
+            database.schedule_draft_send(draft_id, send_at)
+            log_event('catch_up',
+                       f"⏱ Catch-up reply scheduled → {lead.get('business_name')} "
+                       f"(waited {w.get('days_waiting', 0):.1f}d)",
+                       details={'lead_id': lead_id, 'draft_id': draft_id,
+                                'scheduled_for': send_at})
+            drafted += 1
         else:
             log_event('catch_up',
                        f"✍️ Catch-up draft for {lead.get('business_name')} "
@@ -848,28 +858,30 @@ def run_one_cycle():
                 or (_dt.utcnow() - last_heavy) >= _td(minutes=ENGAGEMENT_INTERVAL_MIN))
 
     # === CHEAP work — every tick ===
-    # 0. Drain pending autopilot drafts (incl. scheduled-send timers
-    #    that just hit zero — this is what makes the countdown timer
-    #    feel responsive on a 1-min loop).
+    # 0a. Drain pending autopilot drafts (incl. scheduled-send timers
+    #     that just hit zero — this is what makes the countdown timer
+    #     feel responsive on a 1-min loop).
     if auto_send:
         sent_n, blocked_n = drain_pending_auto_drafts(max_per_run=max_per_run * 4)
         if sent_n or blocked_n:
             log_event('cycle_drain',
                        f"📤 Drained pending: sent {sent_n}, blocked {blocked_n}")
 
+    # 0b. Catch-up: scan inbox for prospects waiting on a reply.
+    #     Used to be gated to heavy cycle (every 15 min) but the
+    #     audit flagged that as broken — if engagement isn't running
+    #     or is in cheap-only mode, replies stalled. Now runs every
+    #     tick, but with a small batch (max 3) so it's cheap.
+    try:
+        catch_up_unanswered_threads(max_per_run=3, auto_send=auto_send)
+    except Exception as e:
+        log_event('error', f"Catch-up scan failed: {str(e)[:100]}")
+
     # === HEAVY work — only every ENGAGEMENT_INTERVAL_MIN ===
     if not do_heavy:
         return
 
     update_state(last_heavy_cycle=_dt.utcnow().isoformat())
-
-    # 1. Catch-up: scan inbox for prospects waiting on a reply that
-    #    fell through. Joseph asked for this 2026-04-30.
-    try:
-        catch_up_unanswered_threads(max_per_run=max(2, max_per_run // 2),
-                                     auto_send=auto_send)
-    except Exception as e:
-        log_event('error', f"Catch-up scan failed: {str(e)[:100]}")
 
     # 2. Engage new hot leads
     candidates = find_engagement_candidates(min_score)

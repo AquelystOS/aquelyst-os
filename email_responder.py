@@ -756,30 +756,41 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
         pass
 
     if auto_send:
-        # Approve, then SCHEDULE the send with the configured natural-
-        # delay window instead of firing immediately. The drain loop
-        # in auto_engagement picks up scheduled drafts whose time has
-        # come, with proper threading.
+        # Approve, then SCHEDULE the send into the FIFO queue. Each
+        # subsequent auto-reply lands at least min_delay seconds AFTER
+        # the latest scheduled draft, so a burst of inbound replies
+        # gets a stacked queue (1 min apart) rather than all firing at
+        # the same random offset. Joseph 2026-04-30: 'auto reply times
+        # are all set to the same launch time they should all be set
+        # one minute apart and stacked so the next email goes out in
+        # the order it was received.'
         database.approve_draft(draft_id)
         try:
             import aqua as _aqua
             _cfg = _aqua.load_config()
             min_d = max(5, int(_cfg.get('send_delay_min_sec', 60)))
-            max_d = max(min_d, int(_cfg.get('send_delay_max_sec', 180)))
         except Exception:
-            min_d, max_d = 60, 180
-        import random as _random
-        from datetime import datetime as _dt, timedelta as _td
-        delay_sec = _random.randint(min_d, max_d)
-        send_at = (_dt.utcnow() + _td(seconds=delay_sec)).isoformat()
+            min_d = 60
+        send_at = database.next_fifo_send_slot(
+            min_gap_seconds=min_d, jitter_max=30)
         database.schedule_draft_send(draft_id, send_at)
+        # Compute the user-visible delay for the log line
+        from datetime import datetime as _dt
+        try:
+            sched_dt = _dt.fromisoformat(send_at.replace('Z', '+00:00'))
+            if sched_dt.tzinfo is not None:
+                sched_dt = sched_dt.replace(tzinfo=None)
+            delay_sec = max(0, int((sched_dt - _dt.utcnow()).total_seconds()))
+        except Exception:
+            delay_sec = min_d
         database.log_activity(lead['id'], 'auto_reply_scheduled',
-                               f"⏱ Auto-reply scheduled in {delay_sec}s: {reply['subject'][:40]}")
+                               f"⏱ Auto-reply scheduled in {delay_sec}s "
+                               f"(FIFO slot): {reply['subject'][:40]}")
         log_event('scheduled',
                    f"⏱ Auto-reply scheduled for {lead['business_name']} "
-                   f"(in {delay_sec}s)",
+                   f"(in {delay_sec}s, FIFO)",
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
-                            'delay_sec': delay_sec})
+                            'delay_sec': delay_sec, 'scheduled_for': send_at})
 
     _mark_processed()
     return draft_id
@@ -1043,21 +1054,23 @@ def _backfill_schedule_unscheduled_auto_replies():
     if not targets:
         return
 
-    base = _dt.utcnow()
-    for i, d in enumerate(targets):
-        # Spread sends over 0-N min, one per minute with random jitter,
-        # so we don't slam SMTP and don't look robotic.
-        slot_min = i
-        jitter = _random.randint(0, 60)
-        send_at = (base + _td(minutes=slot_min, seconds=jitter)).isoformat()
+    # Sort by created_at so the OLDEST drafts get the earliest send
+    # slots — preserves "FIFO order it was received" semantics.
+    targets.sort(key=lambda d: str(d.get('created_at') or ''))
+
+    for d in targets:
+        # FIFO slotting — each backfilled draft lands min_d seconds
+        # after the previous one (or after now, whichever is later).
         try:
+            send_at = database.next_fifo_send_slot(
+                min_gap_seconds=60, jitter_max=15)
             database.schedule_draft_send(d['id'], send_at)
             database.approve_draft(d['id'])
         except Exception:
             pass
     log_event('system',
                f"⏱ Scheduled {len(targets)} pending Aqua drafts to "
-               f"send over the next {len(targets)} minute(s)")
+               f"send FIFO over the next ~{len(targets)} minute(s)")
 
 
 def stop_responder():
