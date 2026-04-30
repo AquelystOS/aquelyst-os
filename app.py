@@ -3691,21 +3691,65 @@ def _inbox_status_fragment():
             except Exception:
                 pass
 
+        # Show actual watcher mode + interval so the user can SEE whether
+        # we're in DRAFT mode or AUTO-REPLY mode. Joseph kept hitting
+        # state where the watcher was running but in draft mode while
+        # he expected auto-reply — invisible mismatch.
+        watcher_state = email_responder.get_state() if watcher_running else {}
+        watcher_mode = watcher_state.get('auto_reply_mode', 'draft')
+        watcher_interval = watcher_state.get('check_interval_minutes', 1)
+        mode_badge = (
+            "<span style='background:#16a34a;color:white;padding:0.05rem 0.4rem;"
+            "border-radius:6px;font-size:0.6rem;font-weight:700'>AUTO-REPLY</span>"
+            if watcher_mode == 'send' and watcher_running else
+            "<span style='background:#f59e0b;color:white;padding:0.05rem 0.4rem;"
+            "border-radius:6px;font-size:0.6rem;font-weight:700'>DRAFT MODE</span>"
+            if watcher_running else ""
+        )
         st.html(
             f"<div style='background:{watcher_bg};border:2px solid {watcher_color};border-radius:12px 12px 0 0;padding:0.85rem 1rem 0.4rem;text-align:center'>"
             f"<div style='font-size:1.5rem'>{watcher_icon}</div>"
             f"<div style='font-size:0.95rem;font-weight:800;color:{watcher_color};margin-top:0.2rem'>{watcher_label}</div>"
             f"<div style='font-size:0.65rem;color:#64748b;font-weight:500;margin-top:0.2rem;height:0.85rem'>{sub_line}</div>"
             f"<div style='font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-top:0.2rem'>"
-            f"Inbox Watcher (every 5min)</div></div>"
+            f"Inbox Watcher (every {watcher_interval}min) {mode_badge}</div></div>"
         )
         toggle_label = "Click to STOP" if watcher_running else "Click to START"
         if st.button(toggle_label, key="inbox_card_watcher_toggle", use_container_width=True):
             if watcher_running:
                 email_responder.stop_responder()
             else:
-                email_responder.start_responder(check_interval_minutes=1, auto_reply_mode='draft')
+                # If auto-engagement is already in auto-send, start watcher
+                # in send mode too so the user doesn't end up with a
+                # draft-mode watcher next to an auto-send engagement.
+                ae_cfg = (auto_engagement.get_state() or {}).get('config', {})
+                ae_running = auto_engagement.is_running()
+                want_send = (ae_running and ae_cfg.get('auto_send', False))
+                start_mode = 'send' if want_send else 'draft'
+                email_responder.start_responder(
+                    check_interval_minutes=1, auto_reply_mode=start_mode)
             st.rerun()
+        # If watcher is running but in DRAFT mode, expose a one-click
+        # promote-to-auto-reply button so the user doesn't have to
+        # stop/restart the watcher just to flip the mode.
+        if watcher_running and watcher_mode != 'send':
+            if st.button("⚡ Switch to AUTO-REPLY",
+                          key="inbox_card_watcher_to_send",
+                          use_container_width=True,
+                          help="Watcher will start auto-sending replies "
+                                "instead of just drafting them. Existing "
+                                "pending replies get scheduled to fire over "
+                                "the next few minutes."):
+                email_responder.set_auto_reply_mode('send')
+                st.rerun()
+        elif watcher_running and watcher_mode == 'send':
+            if st.button("✏️ Switch to DRAFT only",
+                          key="inbox_card_watcher_to_draft",
+                          use_container_width=True,
+                          help="Watcher will draft replies for your approval "
+                                "instead of auto-sending."):
+                email_responder.set_auto_reply_mode('draft')
+                st.rerun()
 
     # AUTO-ENGAGEMENT — clickable TOGGLE
     with cols[3]:

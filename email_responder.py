@@ -767,12 +767,48 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
     return draft_id
 
 
+def _reconcile_mode_with_engagement():
+    """If auto-engagement is running in auto-send mode, the inbox watcher
+    must also be in auto-reply mode — otherwise inbound replies still
+    pile up as drafts even though Joseph said 'autopilot is on.' Re-check
+    this every cycle so a stale state file or a startup-order race
+    can't leave us silently mismatched.
+
+    Returns the actual auto_reply_mode we end up running this cycle.
+    """
+    state = get_state()
+    current_mode = state.get('auto_reply_mode', 'draft')
+    try:
+        import auto_engagement
+        ae_state = auto_engagement.get_state()
+        if (ae_state.get('running')
+                and ae_state.get('config', {}).get('auto_send')):
+            if current_mode != 'send':
+                update_state(auto_reply_mode='send')
+                log_event('system',
+                           f"🔄 Reconciled watcher mode → send "
+                           f"(auto-engagement is in auto-send)")
+                return 'send'
+    except Exception:
+        pass
+    return current_mode
+
+
 def run_one_check():
     """Run a single inbox check cycle for EVERY user with SMTP configured.
     Each user's inbox is polled independently with their own credentials and
     their own processed-message-id list. Inbound messages are tagged with
     assigned_to=<that user> so replies route to whoever owns the thread."""
     update_state(last_check=datetime.now().isoformat())
+
+    # Reconcile mode FIRST so a startup-order race or stale state file
+    # can't leave us in 'draft' mode while auto-engagement is in
+    # auto-send. Joseph hit this on 2026-04-30: watcher said WATCHING,
+    # auto-engagement said AUTO-SEND, but inbound replies were still
+    # being drafted (not auto-sent + scheduled). The reconcile call
+    # ensures every cycle picks up the engagement state.
+    effective_mode = _reconcile_mode_with_engagement()
+    auto_send = effective_mode == 'send'
 
     # Build the list of inboxes to poll. Prefer the per-user SMTP table
     # (multi-tenant). Fall back to the legacy global config for back-compat
@@ -793,8 +829,6 @@ def run_one_check():
             return
         log_event('check_done', f"Found {len(messages)} unread")
         increment_stat('checks_completed')
-        state = get_state()
-        auto_send = state.get('auto_reply_mode') == 'send'
         for msg in messages:
             try:
                 increment_stat('emails_processed')
@@ -805,8 +839,6 @@ def run_one_check():
         return
 
     # Multi-user path — iterate every connected inbox
-    state = get_state()
-    auto_send = state.get('auto_reply_mode') == 'send'
     total_msgs = 0
     log_event('check_start', f"🔍 Polling {len(users)} inbox(es)...")
 
@@ -898,14 +930,69 @@ def start_responder(check_interval_minutes=1, auto_reply_mode='draft'):
 def set_auto_reply_mode(mode):
     """Flip auto_reply_mode without restarting the watcher. Used when
     auto-engagement is toggled (auto-send ON should also flip the inbox
-    watcher to auto-reply, not just queue drafts)."""
+    watcher to auto-reply, not just queue drafts).
+
+    When flipping to 'send', also retroactively schedule existing
+    unscheduled auto_reply_to_* drafts so they actually go out on the
+    next drain. Without this, drafts that piled up while watcher was
+    in draft mode would stay drafts forever after the flip — Joseph
+    saw a stack of these on 2026-04-30.
+    """
     if mode not in ('draft', 'send'):
         return False
     if not get_state().get('running'):
         return False
     update_state(auto_reply_mode=mode)
     log_event('system', f"🔄 Inbox watcher mode changed to {mode}")
+
+    if mode == 'send':
+        try:
+            _backfill_schedule_unscheduled_auto_replies()
+        except Exception as e:
+            log_event('error',
+                       f"backfill schedule failed: {str(e)[:80]}")
     return True
+
+
+def _backfill_schedule_unscheduled_auto_replies():
+    """When user flips watcher to auto-reply mode, schedule any pending
+    auto_reply_to_* drafts that don't already have a scheduled_send_at.
+    Spread across the next few minutes so they don't all fire at once
+    (looks robotic + can hit SMTP rate limits)."""
+    try:
+        pending = database.get_pending_drafts(limit=200) or []
+    except Exception:
+        return
+    import random as _random
+    from datetime import datetime as _dt, timedelta as _td
+
+    AUTO_REPLY_PREFIXES = ('auto_reply_to_', 'ESCALATED_')
+    targets = []
+    for d in pending:
+        msg_type = d.get('message_type') or ''
+        if not msg_type.startswith(AUTO_REPLY_PREFIXES):
+            continue
+        if d.get('scheduled_send_at'):
+            continue
+        targets.append(d)
+    if not targets:
+        return
+
+    base = _dt.utcnow()
+    for i, d in enumerate(targets):
+        # Spread sends over 0-10 min from now, randomized inside each
+        # 60-second window so cadence looks natural.
+        slot_min = i  # 1 send per minute
+        jitter = _random.randint(0, 60)
+        send_at = (base + _td(minutes=slot_min, seconds=jitter)).isoformat()
+        try:
+            database.schedule_draft_send(d['id'], send_at)
+            database.approve_draft(d['id'])
+        except Exception:
+            pass
+    log_event('system',
+               f"⏱ Scheduled {len(targets)} pending auto-replies to "
+               f"send over the next {len(targets)} minute(s)")
 
 
 def stop_responder():
