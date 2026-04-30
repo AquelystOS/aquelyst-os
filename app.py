@@ -5808,6 +5808,133 @@ def _show_aqua_config_sections():
             sc3.metric("Followups drafted", stats.get('followups_drafted', 0))
             sc4.metric("Followups sent", stats.get('followups_sent', 0))
 
+    # --- DEEP DIAGNOSTIC DUMP --------------------------------------------
+    # One-click "show me everything" so a snapshot can be pasted into a
+    # debugging conversation. Better than asking the user to dig through
+    # 8 different state files / DB tables / log streams to figure out
+    # why an autonomous send isn't firing.
+    with st.expander("🔬 Deep diagnostic dump — paste this if Aqua misbehaves",
+                       expanded=False):
+        st.caption(
+            "Click below to compute a snapshot of EVERY runtime state "
+            "Aqua depends on. Copy the JSON and paste it into a "
+            "support chat for fast triage."
+        )
+        if st.button("🔍 Run deep diagnostic", key="aqua_deep_diag",
+                      use_container_width=True, type="primary"):
+            import json as _json
+            from datetime import datetime as _dt_diag
+            now_iso = _dt_diag.utcnow().isoformat()
+            diag = {'snapshot_at_utc': now_iso}
+
+            # Aqua mode + config
+            try:
+                diag['aqua_mode'] = _aqua.get_mode()
+                diag['aqua_config'] = _aqua.load_config()
+            except Exception as e:
+                diag['aqua_error'] = str(e)[:200]
+
+            # Watcher state
+            try:
+                ws = email_responder.get_state() or {}
+                diag['watcher'] = {
+                    'running': ws.get('running'),
+                    'auto_reply_mode': ws.get('auto_reply_mode'),
+                    'check_interval_minutes': ws.get('check_interval_minutes'),
+                    'last_check': ws.get('last_check'),
+                    'last_pulse': ws.get('last_pulse'),
+                    'next_check': ws.get('next_check'),
+                    'stats': ws.get('stats', {}),
+                }
+            except Exception as e:
+                diag['watcher_error'] = str(e)[:200]
+
+            # Engagement state
+            try:
+                es = auto_engagement.get_state() or {}
+                diag['engagement'] = {
+                    'running': es.get('running'),
+                    'config': es.get('config', {}),
+                    'last_run': es.get('last_run'),
+                    'last_pulse': es.get('last_pulse'),
+                    'last_heavy_cycle': es.get('last_heavy_cycle'),
+                    'last_drain': es.get('last_drain'),
+                    'stats': es.get('stats', {}),
+                }
+            except Exception as e:
+                diag['engagement_error'] = str(e)[:200]
+
+            # Pending scheduled drafts (top 10 by soonest-firing)
+            try:
+                pending = database.get_pending_drafts(limit=200) or []
+                from datetime import datetime as _dt_d2
+                _now = _dt_d2.utcnow()
+                rows_with_secs = []
+                for d in pending:
+                    sched = d.get('scheduled_send_at')
+                    secs = None
+                    if sched:
+                        try:
+                            sched_dt = _dt_d2.fromisoformat(str(sched).replace('Z', '+00:00'))
+                            if sched_dt.tzinfo is not None:
+                                sched_dt = sched_dt.replace(tzinfo=None)
+                            secs = int((sched_dt - _now).total_seconds())
+                        except Exception:
+                            pass
+                    rows_with_secs.append({
+                        'id': d.get('id'),
+                        'lead_id': d.get('lead_id'),
+                        'business_name': d.get('business_name'),
+                        'email': d.get('lead_email'),
+                        'message_type': d.get('message_type'),
+                        'subject': (d.get('subject') or '')[:80],
+                        'created_at': d.get('created_at'),
+                        'created_by': d.get('created_by'),
+                        'scheduled_send_at': sched,
+                        'fires_in_sec': secs,
+                        'approved': d.get('approved'),
+                    })
+                rows_with_secs.sort(key=lambda r: (r['fires_in_sec']
+                                                    if r['fires_in_sec'] is not None
+                                                    else 999999))
+                diag['pending_drafts_count'] = len(pending)
+                diag['pending_drafts_top10'] = rows_with_secs[:10]
+            except Exception as e:
+                diag['drafts_error'] = str(e)[:200]
+
+            # SMTP per-user
+            try:
+                smtp_users = database.smtp_list_all() or []
+                diag['smtp_configured_users'] = [
+                    {'user_email': u.get('user_email'),
+                     'provider': u.get('provider'),
+                     'smtp_email': u.get('smtp_email'),
+                     'has_password': bool(u.get('app_password'))}
+                    for u in smtp_users
+                ]
+            except Exception as e:
+                diag['smtp_error'] = str(e)[:200]
+
+            # Recent activity log (last 25 events)
+            try:
+                ae_log = auto_engagement.read_log()[-15:]
+                er_log = email_responder.read_log()[-15:]
+                diag['engagement_log_tail'] = ae_log
+                diag['watcher_log_tail'] = er_log
+            except Exception as e:
+                diag['log_error'] = str(e)[:200]
+
+            # Display
+            json_str = _json.dumps(diag, indent=2, default=str)
+            st.success(f"✅ Snapshot captured at {now_iso}")
+            st.code(json_str, language='json')
+            st.download_button(
+                "📥 Download as aqua_diagnostic.json",
+                data=json_str,
+                file_name=f"aqua_diagnostic_{now_iso[:19].replace(':', '-')}.json",
+                mime='application/json',
+            )
+
     # --- CRM HYGIENE -------------------------------------------------------
     with st.expander(
         "🧹 CRM hygiene — dedupe leads + clear scheduled queue",
@@ -7898,7 +8025,14 @@ def _render_conversation_thread(thread, lead, key_ns=""):
             # in the future, show "⏱ AUTO-SENDS IN 1:23" instead of just
             # DRAFT. Joseph asked for this so auto-replies feel less
             # robotic-fast and more like a thoughtful response.
-            scheduled_iso = msg.get('scheduled_send_at')
+            # Only compute the countdown if Aqua is actually running;
+            # when OFF, scheduled_send_at is a leftover that won't fire,
+            # so the badge would lie.
+            try:
+                _aqua_md = _cached_aqua_summary().get('mode', 'off')
+            except Exception:
+                _aqua_md = 'off'
+            scheduled_iso = msg.get('scheduled_send_at') if _aqua_md != 'off' else None
             secs_until_send = None
             if is_draft and scheduled_iso:
                 try:
@@ -7963,7 +8097,15 @@ def _render_conversation_thread(thread, lead, key_ns=""):
             # Live-tick countdown rendered BELOW the bubble for scheduled
             # drafts. The static "⏱ SCHEDULED" badge in the bubble
             # header is just a flag; this is the actually-ticking timer.
-            if is_draft and secs_until_send is not None:
+            # Suppressed entirely when Aqua is OFF — the timer would
+            # be lying about a send that won't happen because the
+            # drain loop is stopped.
+            try:
+                _aqua_mode_thread = _cached_aqua_summary().get('mode', 'off')
+            except Exception:
+                _aqua_mode_thread = 'off'
+            if (is_draft and secs_until_send is not None
+                    and _aqua_mode_thread != 'off'):
                 _render_live_countdown(
                     secs_remaining=secs_until_send,
                     prefix='⏱ AUTO-SENDS IN',
