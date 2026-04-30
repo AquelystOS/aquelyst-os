@@ -742,6 +742,19 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
                f"✍️ Drafted reply to {lead['business_name']}: {reply['subject'][:50]}",
                details={'lead_id': lead['id'], 'draft_id': draft_id, 'source': reply['source']})
 
+    # AUTHORITATIVE MODE CHECK — if Aqua's global mode says autonomous,
+    # force auto_send=True regardless of what the caller passed. This
+    # closes a race where the watcher cycle started in 'draft' mode
+    # but Aqua got toggled to AUTONOMOUS mid-cycle. Joseph saw multiple
+    # inbound replies being drafted (no timer) when he expected
+    # auto-reply.
+    try:
+        import aqua as _aqua
+        if _aqua.get_mode() == 'autonomous':
+            auto_send = True
+    except Exception:
+        pass
+
     if auto_send:
         # Approve, then SCHEDULE the send with the configured natural-
         # delay window instead of firing immediately. The drain loop
@@ -881,7 +894,10 @@ def run_one_check():
 
 
 def responder_loop():
-    """Background loop — checks inbox every N minutes."""
+    """Background loop — checks inbox every N minutes AND drains
+    scheduled drafts whose timer hit zero. Drain runs even between
+    inbox polls so scheduled auto-replies fire within ~30s of their
+    target time even if auto-engagement isn't running."""
     while True:
         state = get_state()
         if not state.get('running', False):
@@ -892,16 +908,47 @@ def responder_loop():
         except Exception as e:
             log_event('error', f"Loop error: {str(e)[:120]}")
 
+        # Drain scheduled drafts whose timer has matured. Joseph
+        # caught replies sitting after the timer hit zero because the
+        # only drain path was inside auto_engagement's own loop —
+        # if engagement was off or its cycle was mid-heavy-work, the
+        # ready draft waited too long. Watcher running this drain
+        # tightens worst-case dispatch latency to one watcher tick.
+        try:
+            import auto_engagement
+            sent_n, blocked_n = auto_engagement.drain_pending_auto_drafts(
+                max_per_run=10)
+            if sent_n or blocked_n:
+                log_event('drain',
+                           f"📤 Drained {sent_n} timer-ready drafts "
+                           f"({blocked_n} blocked) from watcher loop")
+        except Exception as e:
+            log_event('error', f"Watcher drain failed: {str(e)[:80]}")
+
         # Sleep until next check
-        interval = state.get('check_interval_minutes', 30)
+        interval = state.get('check_interval_minutes', 1)
         next_check = datetime.now() + timedelta(minutes=interval)
         update_state(next_check=next_check.isoformat())
 
-        # Sleep in 5-second chunks so stop signal is responsive
-        for _ in range(interval * 12):  # interval*60/5
+        # Sleep in 5-second chunks so stop signal is responsive AND
+        # so we drain timers more often than the IMAP poll interval.
+        # The drain runs at the top of every iteration; sleeping in
+        # 5s chunks means a 1-min interval = 12 drain checks.
+        slept = 0
+        target_sleep = max(interval, 1) * 60
+        while slept < target_sleep:
             if not get_state().get('running', False):
                 return
             time.sleep(5)
+            slept += 5
+            # Mid-interval timer drain so a 60-180s timer fires within
+            # ~30s of zero even when interval is 5 min.
+            if slept % 30 == 0 and slept < target_sleep:
+                try:
+                    import auto_engagement
+                    auto_engagement.drain_pending_auto_drafts(max_per_run=10)
+                except Exception:
+                    pass
 
 
 def start_responder(check_interval_minutes=1, auto_reply_mode='draft'):

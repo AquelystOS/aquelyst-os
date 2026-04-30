@@ -3665,12 +3665,11 @@ def _aqua_daily_brief():
         st.rerun()
 
 
-@st.fragment(run_every=30)
+@st.fragment(run_every=5)
 def _inbox_status_fragment():
-    """3 cards: Sent / Drafts pending / Aqua status. Replaces the
-    previous 4-card row that exposed Watcher and Auto-Engagement
-    separately — now both are routed through the single Aqua mode
-    toggle on the Aqua page."""
+    """3 cards: Sent / Drafts pending / Aqua status. Refreshes every
+    5 seconds (was 30) so new inbound emails show up quickly without
+    full page reloads."""
     # Defensive against transient DB blips so a Supabase pooler death
     # doesn't take down the whole inbox.
     try:
@@ -6283,8 +6282,8 @@ def _show_split_received_replies():
         else:
             external_msgs.append(m)
 
-    # ===== EXTERNAL REPLIES (top — most important) =====
-    # Filters
+    # Filters live OUTSIDE the auto-refresh fragment so changing them
+    # doesn't get clobbered by the next 10s tick.
     f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
     intent_filter = f1.selectbox(
         "Intent", ["All", "interested", "ready_to_buy", "pricing_request",
@@ -6299,7 +6298,39 @@ def _show_split_received_replies():
         key="inbox_age_filter")
     f4.write("")  # spacer
 
-    # Apply filters
+    # The inbound list itself auto-refreshes every 10 seconds so new
+    # emails arriving via the watcher poll (every 1 min) appear without
+    # a manual page reload. Joseph: 'as soon as an email is received it
+    # should pop up in the from customers & prospects.'
+    _inbox_lists_fragment()
+
+
+@st.fragment(run_every=10)
+def _inbox_lists_fragment():
+    """Auto-refreshes every 10s. Re-reads inbound + filters + renders
+    the customer/prospect list, the junk/dismissed bin, and the team
+    section. Lives in its own fragment so new emails surface live."""
+    # Re-read the inbound list so newly-watcher-saved messages appear
+    try:
+        inbound = database.get_all_inbound(limit=200, include_junk=False)
+    except Exception:
+        inbound = []
+    # Split team vs external (same as the page-level read)
+    import team as _team
+    team_msgs = []
+    external_msgs = []
+    for m in inbound:
+        from_email = (m['from_email'] or '').lower().strip()
+        if _team.get_member_by_email(from_email):
+            team_msgs.append(m)
+        else:
+            external_msgs.append(m)
+
+    # Read filter values (set by the widgets outside the fragment)
+    intent_filter = st.session_state.get('inbox_intent_filter', 'All')
+    sentiment_filter = st.session_state.get('inbox_sentiment_filter', 'All')
+    age_filter = st.session_state.get('inbox_age_filter', 'All')
+
     from datetime import datetime as _dt, timedelta as _td
     filtered = list(external_msgs)
     if intent_filter != "All":
@@ -6331,8 +6362,11 @@ def _show_split_received_replies():
             _render_inbound_card(m, is_team=False)
 
     # Dismissed messages (junk) — undo if needed
-    junk_inbound = [m for m in database.get_all_inbound(limit=100, include_junk=True)
-                    if m['is_junk']]
+    try:
+        junk_inbound = [m for m in database.get_all_inbound(limit=100, include_junk=True)
+                        if m['is_junk']]
+    except Exception:
+        junk_inbound = []
     if junk_inbound:
         with st.expander(f"🗑 Dismissed as junk ({len(junk_inbound)}) — undo if you change your mind"):
             for m in junk_inbound[:30]:
@@ -6348,7 +6382,7 @@ def _show_split_received_replies():
 
     st.markdown("---")
 
-    # ===== TEAM REPLIES (separate box) =====
+    # Team replies in their own card
     st.markdown(f"### 🤝 From your AqueLyst team ({len(team_msgs)})")
     if not team_msgs:
         st.caption("_No team replies yet_")
@@ -6359,6 +6393,10 @@ def _show_split_received_replies():
 
 def _render_inbound_card(msg, is_team=False):
     """Render a single inbound message card. Click to expand the full conversation thread."""
+    # Make sure the JS countdown ticker is running so any AUTO-SENDS
+    # badges below tick in real time without page reloads.
+    _inject_countdown_ticker_once()
+
     biz = msg['business_name'] or msg['from_name'] or 'Unknown'
     from_email = msg['from_email'] or ''
     subject = msg['subject'] or '(no subject)'
@@ -6368,6 +6406,34 @@ def _render_inbound_card(msg, is_team=False):
     intent = msg['intent'] or ''
     sentiment = msg['sentiment'] or 'neutral'
     summary = msg['summary'] or ''
+
+    # Look up the soonest-firing scheduled auto-reply draft for this
+    # lead so we can show the AUTO-SENDS countdown ABOVE the expander —
+    # Joseph: 'i shouldnt have to open the email to see the countdown.'
+    secs_until_send = None
+    soonest_draft = None
+    try:
+        from datetime import datetime as _dt
+        now_utc = _dt.utcnow()
+        drafts_for_lead = database.get_drafts_for_lead(msg['lead_id'])
+        for d in drafts_for_lead:
+            if d.get('sent'):
+                continue
+            sched = d.get('scheduled_send_at')
+            if not sched:
+                continue
+            try:
+                sched_dt = _dt.fromisoformat(str(sched).replace('Z', '+00:00'))
+                if sched_dt.tzinfo is not None:
+                    sched_dt = sched_dt.replace(tzinfo=None)
+                secs = int((sched_dt - now_utc).total_seconds())
+                if secs > 0 and (secs_until_send is None or secs < secs_until_send):
+                    secs_until_send = secs
+                    soonest_draft = d
+            except Exception:
+                continue
+    except Exception:
+        pass
 
     intent_color = {
         'interested': '#16a34a', 'question': '#0ea5e9', 'objection': '#f59e0b',
@@ -6394,6 +6460,28 @@ def _render_inbound_card(msg, is_team=False):
                 database.mark_inbound_junk(msg['id'], reason="Manual dismiss from inbox")
                 st.toast("✅ Dismissed. Aqua learned the pattern.", icon="🧠")
                 st.rerun()
+
+        # If there's a scheduled auto-reply pending for this lead,
+        # show the live AUTO-SENDS countdown right above the expander
+        # so the user sees it without opening anything. Uses the same
+        # JS-ticker mechanism as the thread-view badges.
+        if secs_until_send is not None:
+            mins = secs_until_send // 60
+            secs = secs_until_send % 60
+            cd_id = f"cd_inbox_{msg['id']}"
+            draft_subj = (soonest_draft.get('subject') or '')[:60] if soonest_draft else ''
+            st.html(
+                f"<div style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
+                f"color:#0a0f1c;padding:0.4rem 0.85rem;border-radius:8px;"
+                f"margin-bottom:0.4rem;font-size:0.85rem;font-weight:700;"
+                f"display:flex;justify-content:space-between;align-items:center;gap:0.7rem'>"
+                f"<span>⏱ Aqua's reply auto-sends in "
+                f"<span id='{cd_id}' data-aqua-cd='{secs_until_send}' "
+                f"style='font-family:JetBrains Mono,monospace'>{mins}:{secs:02d}</span></span>"
+                f"<span style='font-weight:500;font-size:0.78rem;opacity:0.85'>"
+                f"→ {draft_subj}</span>"
+                f"</div>"
+            )
 
         # Click to expand the full conversation
         with st.expander(f"📨  **{biz}** · {received}  ·  _{subject[:60]}_"):
