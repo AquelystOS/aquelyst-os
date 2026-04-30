@@ -960,22 +960,35 @@ def set_auto_reply_mode(mode):
 
 
 def _backfill_schedule_unscheduled_auto_replies():
-    """When user flips watcher to auto-reply mode, schedule any pending
-    auto_reply_to_* drafts that don't already have a scheduled_send_at.
-    Spread across the next few minutes so they don't all fire at once
-    (looks robotic + can hit SMTP rate limits)."""
+    """When user flips Aqua to autonomous mode, schedule EVERY pending
+    Aqua-generated draft that doesn't already have a scheduled_send_at.
+
+    Joseph's 2026-04-30 testing: Tyrone International got an outbound
+    cold-email draft (nepq_initial) but no timer was set, so he had to
+    click 'Schedule send' manually. The previous backfill list only
+    covered inbound auto-reply prefixes — outbound nepq_initial /
+    nepq_followup_ / aqua_intro drafts were left unscheduled.
+
+    All Aqua prefixes now backfill so the user never has to manually
+    set a timer in autonomous mode.
+    """
     try:
-        pending = database.get_pending_drafts(limit=200) or []
+        pending = database.get_pending_drafts(limit=500) or []
     except Exception:
         return
     import random as _random
     from datetime import datetime as _dt, timedelta as _td
 
-    AUTO_REPLY_PREFIXES = ('auto_reply_to_', 'ESCALATED_')
+    AUTO_PREFIXES = (
+        # Inbound: replies the inbox watcher generated
+        'auto_reply_to_', 'ESCALATED_',
+        # Outbound: cold emails + follow-ups + intros from auto-engagement
+        'nepq_initial', 'nepq_followup_', 'aqua_intro',
+    )
     targets = []
     for d in pending:
         msg_type = d.get('message_type') or ''
-        if not msg_type.startswith(AUTO_REPLY_PREFIXES):
+        if not msg_type.startswith(AUTO_PREFIXES):
             continue
         if d.get('scheduled_send_at'):
             continue
@@ -985,9 +998,9 @@ def _backfill_schedule_unscheduled_auto_replies():
 
     base = _dt.utcnow()
     for i, d in enumerate(targets):
-        # Spread sends over 0-10 min from now, randomized inside each
-        # 60-second window so cadence looks natural.
-        slot_min = i  # 1 send per minute
+        # Spread sends over 0-N min, one per minute with random jitter,
+        # so we don't slam SMTP and don't look robotic.
+        slot_min = i
         jitter = _random.randint(0, 60)
         send_at = (base + _td(minutes=slot_min, seconds=jitter)).isoformat()
         try:
@@ -996,7 +1009,7 @@ def _backfill_schedule_unscheduled_auto_replies():
         except Exception:
             pass
     log_event('system',
-               f"⏱ Scheduled {len(targets)} pending auto-replies to "
+               f"⏱ Scheduled {len(targets)} pending Aqua drafts to "
                f"send over the next {len(targets)} minute(s)")
 
 

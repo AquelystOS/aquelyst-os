@@ -252,6 +252,46 @@ def _within_business_hours():
     return True, ''
 
 
+def _next_business_hours_open():
+    """Return a datetime (UTC, naive) for the NEXT moment business
+    hours start (Mon-Fri 7am ET). Used to schedule outside-hours
+    auto-drafts so they pick up automatically when the window opens.
+
+    Adds a small randomized jitter (0-15 min) so a backlog doesn't
+    all fire at exactly 7:00 AM and look like a bot-blast.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    import random as _random
+    try:
+        import ui_kit
+        now_et = ui_kit.now_et()
+    except Exception:
+        now_et = _dt.utcnow() - _td(hours=4)  # rough EDT offset
+
+    candidate = now_et.replace(hour=7, minute=0, second=0, microsecond=0)
+    # If it's already past today's 7am open, advance to tomorrow.
+    if candidate <= now_et:
+        candidate = candidate + _td(days=1)
+    # Skip weekends — push to Monday
+    while candidate.weekday() >= 5:  # 5=Sat, 6=Sun
+        candidate = candidate + _td(days=1)
+    candidate = candidate + _td(minutes=_random.randint(0, 15))
+
+    # Convert ET back to naive UTC for storage. ui_kit.now_et returns a
+    # tz-aware datetime; subtract the offset to get UTC.
+    if hasattr(candidate, 'tzinfo') and candidate.tzinfo:
+        candidate_utc = candidate.astimezone(tz=None).replace(tzinfo=None)
+        # If astimezone(None) doesn't yield UTC on this Python build, fall
+        # back to manual conversion via the offset.
+        try:
+            from datetime import timezone as _tz
+            candidate_utc = candidate.astimezone(_tz.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+        return candidate_utc
+    return candidate
+
+
 def engage_lead_initial(lead, auto_send=False):
     """Send the FIRST NEPQ-style email to a lead."""
     log_event('engaging', f"💌 Engaging {lead['business_name']} (score {lead['lead_score']})")
@@ -270,18 +310,24 @@ def engage_lead_initial(lead, auto_send=False):
     )
 
     # Send-time guardrail — even if auto_send=True, only fire during
-    # business hours. Outside that window, downgrade to "drafted" so the
-    # team can review + send Monday morning.
+    # business hours. Outside that window, schedule the draft for the
+    # NEXT business-hours open instead of leaving it unscheduled. This
+    # preserves the "every autonomous draft has a visible timer"
+    # invariant Joseph asked for.
     allowed, reason = _within_business_hours()
     if auto_send and not allowed:
+        database.approve_draft(draft_id)
+        next_open = _next_business_hours_open()
+        database.schedule_draft_send(draft_id, next_open.isoformat())
         database.update_lead(lead['id'], status='drafted')
-        database.log_activity(lead['id'], 'auto_engagement_drafted',
-                               f"NEPQ initial drafted (auto-send blocked: {reason})")
+        database.log_activity(lead['id'], 'auto_engagement_scheduled_offhours',
+                               f"⏱ NEPQ initial scheduled for {next_open.strftime('%a %b %d %I:%M %p')} ET ({reason})")
         increment_stat('initial_emails_drafted')
         log_event('queued',
-                   f"⏸ Queued (not auto-sent: {reason}) — {lead['business_name']}",
+                   f"⏸ {lead['business_name']} → scheduled for next business-hours open ({reason})",
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
-                            'reason': reason})
+                            'reason': reason,
+                            'scheduled_for': next_open.isoformat()})
         return draft_id
 
     # Aqua quality gate — when the user has explicitly opted into auto-send,
@@ -414,16 +460,21 @@ def engage_lead_followup(lead, auto_send=False):
         result['subject'], result['body']
     )
 
-    # Same business-hours guardrail as the initial-engagement path
+    # Same business-hours guardrail as the initial-engagement path —
+    # schedule for next open instead of leaving timer off.
     allowed, reason = _within_business_hours()
     if auto_send and not allowed:
-        database.log_activity(lead['id'], 'auto_followup_drafted',
-                               f"Followup #{touch_number} drafted (auto-send blocked: {reason})")
+        database.approve_draft(draft_id)
+        next_open = _next_business_hours_open()
+        database.schedule_draft_send(draft_id, next_open.isoformat())
+        database.log_activity(lead['id'], 'auto_followup_scheduled_offhours',
+                               f"⏱ Followup #{touch_number} scheduled for {next_open.strftime('%a %b %d %I:%M %p')} ET ({reason})")
         increment_stat('followups_drafted')
         log_event('queued',
-                   f"⏸ Followup #{touch_number} queued (not auto-sent: {reason}) — {lead['business_name']}",
+                   f"⏸ Followup #{touch_number} → scheduled for next business open ({reason})",
                    details={'lead_id': lead['id'], 'draft_id': draft_id,
-                            'reason': reason})
+                            'reason': reason,
+                            'scheduled_for': next_open.isoformat()})
         return draft_id
 
     # Aqua quality gate on followups — same lenient policy as initial:

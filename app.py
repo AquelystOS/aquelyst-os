@@ -1265,6 +1265,49 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def _inject_countdown_ticker_once():
+    """Insert a tiny JS ticker (via st.components.v1.html iframe) that
+    decrements every <span data-aqua-cd='SECS'> on the page once per
+    second. Without this the AUTO-SENDS badge would just be a snapshot
+    at render time — Joseph: 'OS refresh rate sucks its not showing
+    countdown in live time.'
+
+    Idempotent: gated by st.session_state so the iframe is added at
+    most once per Streamlit session. Re-rendered fragment HTML keeps
+    the data-aqua-cd attribute accurate (server-side) while the JS
+    ticks the visible text in between rerenders.
+    """
+    if st.session_state.get('_aqua_ticker_injected'):
+        return
+    st.session_state['_aqua_ticker_injected'] = True
+    import streamlit.components.v1 as _components
+    _components.html(
+        """
+<script>
+(function() {
+  function fmt(s){var m=Math.floor(s/60),sec=s%60;return m+':'+(sec<10?'0':'')+sec;}
+  function tick() {
+    try {
+      var els = window.parent.document.querySelectorAll('[data-aqua-cd]');
+      els.forEach(function(el){
+        var n = parseInt(el.getAttribute('data-aqua-cd'));
+        if (isNaN(n) || n <= 0) return;
+        n -= 1;
+        el.setAttribute('data-aqua-cd', n);
+        el.textContent = fmt(n);
+      });
+    } catch (e) { /* iframe may be sandboxed — fall back silently */ }
+  }
+  if (!window.parent._aquaTicker) {
+    window.parent._aquaTicker = setInterval(tick, 1000);
+  }
+})();
+</script>
+""",
+        height=0,
+    )
+
+
 # ===========================================================================
 # STATE & ROUTING
 # ===========================================================================
@@ -5069,6 +5112,8 @@ def show_sales_bot():
 
     _show_aqua_mode_toggle()
     st.markdown("---")
+    _aqua_live_activity_fragment()
+    st.markdown("---")
     _show_aqua_config_sections()
     st.markdown("---")
 
@@ -5093,6 +5138,161 @@ def show_sales_bot():
         _show_bot_logs()
     with tab_test:
         _show_bot_test_panel()
+
+
+@st.fragment(run_every=2)
+def _aqua_live_activity_fragment():
+    """Real-time view of what Aqua is doing right now. Refreshes every
+    2 seconds so the countdown to the next auto-send actually ticks
+    down on screen — Joseph's 2026-04-30 ask: 'the OS refresh rate
+    sucks its not showing countdown in live time and im not even sure
+    what its actually doing.'
+
+    Shows: current mode · scheduled draft count · next-fire countdown ·
+    last engine activity · last inbox check.
+    """
+    import aqua as _aqua
+    summary = _aqua.get_status_summary()
+    mode = summary['mode']
+
+    # Pull pending drafts and find the soonest-firing scheduled one
+    try:
+        pending = database.get_pending_drafts(limit=200) or []
+    except Exception:
+        pending = []
+
+    from datetime import datetime as _dt
+    now_utc = _dt.utcnow()
+    scheduled_count = 0
+    soonest = None
+    soonest_secs = None
+    for d in pending:
+        sched = d.get('scheduled_send_at')
+        if not sched:
+            continue
+        scheduled_count += 1
+        try:
+            sched_dt = _dt.fromisoformat(str(sched).replace('Z', '+00:00'))
+            if sched_dt.tzinfo is not None:
+                sched_dt = sched_dt.replace(tzinfo=None)
+            secs = int((sched_dt - now_utc).total_seconds())
+        except Exception:
+            continue
+        if secs > 0 and (soonest_secs is None or secs < soonest_secs):
+            soonest = d
+            soonest_secs = secs
+
+    # Status line
+    mode_color = {'off': '#94a3b8', 'drafting': '#06b6d4',
+                   'autonomous': '#a3e635'}.get(mode, '#94a3b8')
+    mode_label = {'off': '⏸ OFF',
+                   'drafting': '✍️ DRAFTING',
+                   'autonomous': '🚀 AUTONOMOUS'}.get(mode, '⏸ OFF')
+
+    eng_state = summary['engagement_state']
+    watcher_state = summary['watcher_state']
+    eng_stats = eng_state.get('stats', {}) or {}
+    last_run = eng_state.get('last_run', '') or ''
+    last_check = watcher_state.get('last_check', '') or ''
+    last_run_short = last_run[11:19] if last_run else '—'
+    last_check_short = last_check[11:19] if last_check else '—'
+
+    # Render top status row
+    st.html(
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+        "color:#94a3b8;letter-spacing:0.18em;text-transform:uppercase;"
+        "font-weight:700;margin-bottom:0.6rem'>◢ LIVE ACTIVITY · refreshes every 2s</div>"
+    )
+    cols = st.columns(4)
+    with cols[0]:
+        st.html(
+            f"<div style='background:rgba(15,23,42,0.55);border:1px solid {mode_color};"
+            f"border-radius:12px;padding:0.7rem 0.9rem;text-align:center'>"
+            f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:0.08em;font-weight:700'>MODE</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:{mode_color};margin-top:0.2rem'>"
+            f"{mode_label}</div></div>"
+        )
+    with cols[1]:
+        scheduled_color = '#a3e635' if scheduled_count > 0 else '#475569'
+        st.html(
+            f"<div style='background:rgba(15,23,42,0.55);border:1px solid rgba(148,163,184,0.20);"
+            f"border-radius:12px;padding:0.7rem 0.9rem;text-align:center'>"
+            f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:0.08em;font-weight:700'>SCHEDULED</div>"
+            f"<div style='font-size:1.4rem;font-weight:800;color:{scheduled_color};"
+            f"margin-top:0.1rem;line-height:1'>{scheduled_count}</div>"
+            f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>auto-sends queued</div></div>"
+        )
+    with cols[2]:
+        if soonest_secs is not None:
+            mins = soonest_secs // 60
+            secs = soonest_secs % 60
+            countdown = f"{mins}:{secs:02d}"
+            biz = (soonest.get('business_name') or '?')[:22]
+            st.html(
+                f"<div style='background:linear-gradient(135deg,#06b6d433,#a3e63522);"
+                f"border:1px solid #06b6d4;border-radius:12px;padding:0.7rem 0.9rem;"
+                f"text-align:center'>"
+                f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+                f"letter-spacing:0.08em;font-weight:700'>NEXT FIRES IN</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#06b6d4;"
+                f"margin-top:0.1rem;font-family:JetBrains Mono,monospace;line-height:1'>"
+                f"{countdown}</div>"
+                f"<div style='font-size:0.6rem;color:#64748b;margin-top:0.15rem'>"
+                f"→ {biz}</div></div>"
+            )
+        else:
+            st.html(
+                f"<div style='background:rgba(15,23,42,0.55);"
+                f"border:1px solid rgba(148,163,184,0.20);border-radius:12px;"
+                f"padding:0.7rem 0.9rem;text-align:center'>"
+                f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+                f"letter-spacing:0.08em;font-weight:700'>NEXT FIRES IN</div>"
+                f"<div style='font-size:1.0rem;font-weight:800;color:#475569;"
+                f"margin-top:0.3rem'>nothing queued</div></div>"
+            )
+    with cols[3]:
+        st.html(
+            f"<div style='background:rgba(15,23,42,0.55);"
+            f"border:1px solid rgba(148,163,184,0.20);border-radius:12px;"
+            f"padding:0.7rem 0.9rem;text-align:center'>"
+            f"<div style='font-size:0.62rem;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:0.08em;font-weight:700'>LAST PULSE</div>"
+            f"<div style='font-size:0.78rem;color:#cbd5e1;margin-top:0.15rem;line-height:1.35'>"
+            f"engine {last_run_short}<br>inbox {last_check_short}</div></div>"
+        )
+
+    # Stat strip
+    sent_n = eng_stats.get('initial_emails_sent', 0)
+    drafted_n = eng_stats.get('initial_emails_drafted', 0)
+    fu_drafted = eng_stats.get('followups_drafted', 0)
+    fu_sent = eng_stats.get('followups_sent', 0)
+    replies_drafted = (watcher_state.get('stats') or {}).get('replies_drafted', 0)
+    replies_sent = (watcher_state.get('stats') or {}).get('replies_auto_sent', 0)
+    st.html(
+        f"<div style='display:flex;gap:0.6rem;flex-wrap:wrap;margin-top:0.6rem;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#cbd5e1'>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"initial drafted {drafted_n}</span>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"initial sent {sent_n}</span>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"followups drafted {fu_drafted}</span>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"followups sent {fu_sent}</span>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"replies drafted {replies_drafted}</span>"
+        f"<span style='background:rgba(15,23,42,0.50);padding:0.2rem 0.55rem;"
+        f"border-radius:999px;border:1px solid rgba(148,163,184,0.20)'>"
+        f"replies sent {replies_sent}</span>"
+        f"</div>"
+    )
 
 
 def _show_aqua_mode_toggle():
@@ -7217,6 +7417,9 @@ def _render_conversation_thread(thread, lead, key_ns=""):
     rendered from multiple parent contexts (e.g., separate inbox cards) doesn't
     collide on Streamlit element IDs.
     """
+    # Make sure the JS countdown ticker is running so AUTO-SENDS badges
+    # tick down in real time without server roundtrips.
+    _inject_countdown_ticker_once()
 
     contact_name = (lead['contact_name'] or 'them').split()[0] if lead['contact_name'] else 'them'
 
@@ -7267,12 +7470,20 @@ def _render_conversation_thread(thread, lead, key_ns=""):
             elif secs_until_send is not None:
                 mins = secs_until_send // 60
                 secs = secs_until_send % 60
+                # Live-ticking countdown — embeds a tiny <script> that
+                # decrements every second WITHOUT a server roundtrip.
+                # Without this the badge only updated on full page
+                # reload, so Joseph saw "AUTO-SENDS IN 1:49" frozen
+                # on screen.
+                cd_id = f"cd_{msg.get('id', 'x')}"
                 sent_badge = (
                     f"<span style='background:linear-gradient(135deg,#06b6d4,#a3e635);"
                     f"color:#0a0f1c;padding:0.1rem 0.55rem;border-radius:8px;"
                     f"font-size:0.7rem;font-weight:700;margin-left:0.5rem' "
                     f"title='Auto-sends when the timer hits zero. Hit Send Now to fire it instantly, or Cancel timer to keep it as a draft.'>"
-                    f"⏱ AUTO-SENDS IN {mins}:{secs:02d}</span>"
+                    f"⏱ AUTO-SENDS IN <span id='{cd_id}' "
+                    f"data-aqua-cd='{secs_until_send}'>{mins}:{secs:02d}</span>"
+                    f"</span>"
                 )
             else:
                 sent_badge = (
