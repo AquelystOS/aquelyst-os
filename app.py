@@ -5981,6 +5981,37 @@ def _show_aqua_config_sections():
                        f"pending — flip to AUTONOMOUS to re-queue.")
             st.rerun()
 
+        st.markdown("---")
+        st.caption(
+            "🚨 **Emergency: collapse duplicate drafts.** Joseph hit a "
+            "case where Streamlit Cloud's ephemeral filesystem wiped "
+            "the processed-message-id list on container restart, then "
+            "every unread inbound got re-processed and a fresh "
+            "duplicate draft was generated each time. End result: "
+            "hundreds of drafts for a few dozen leads. This button "
+            "keeps the MOST RECENT pending draft per (lead × type) "
+            "and deletes the older copies. Sent drafts are never "
+            "touched."
+        )
+        col_dd_a, col_dd_b = st.columns(2)
+        with col_dd_a:
+            if st.button("🔍 Preview duplicate drafts (dry run)",
+                          key="aqua_dedupe_drafts_preview",
+                          use_container_width=True):
+                kept, deleted = database.delete_duplicate_auto_drafts(dry_run=True)
+                st.info(f"Would keep {kept} (one per lead/type), "
+                        f"delete {deleted} duplicates.")
+        with col_dd_b:
+            if st.button("🧹 Collapse duplicate drafts now",
+                          key="aqua_dedupe_drafts_run",
+                          use_container_width=True,
+                          type="primary"):
+                with st.spinner("Cleaning up..."):
+                    kept, deleted = database.delete_duplicate_auto_drafts(
+                        dry_run=False)
+                st.success(f"✅ Kept {kept} unique · deleted {deleted} dupes.")
+                st.rerun()
+
     # --- AUTO-SEND TIMER ---------------------------------------------------
     with st.expander(
         f"⏱ Auto-send timer · {cfg['send_delay_min_sec']}–{cfg['send_delay_max_sec']}s natural delay",

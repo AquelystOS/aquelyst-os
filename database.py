@@ -2206,6 +2206,101 @@ def cancel_scheduled_send(draft_id):
         conn.close()
 
 
+def has_inbound_with_message_id(rfc_msg_id):
+    """Check if an inbound message with this RFC Message-ID has already
+    been saved. Used as a hard guard against duplicate auto-replies
+    after Streamlit Cloud wipes the processed_message_ids file on
+    container restart — without this, every unread email gets
+    re-processed and a fresh duplicate draft is generated each time.
+    """
+    if not rfc_msg_id:
+        return False
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('SELECT id FROM inbound_messages WHERE message_id_rfc = ? LIMIT 1',
+                  (rfc_msg_id,))
+        return c.fetchone() is not None
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def delete_duplicate_auto_drafts(dry_run=False):
+    """Emergency cleanup: collapse duplicate Aqua-generated drafts.
+
+    Joseph's 2026-04-30 fire: 400 pending drafts for ~38 customers,
+    ~10x duplicates per lead. Cause: processed_message_ids.json got
+    wiped on container restart, every prior unread email got
+    re-processed, fresh draft each time.
+
+    Strategy: for each (lead_id, message_type) pair where message_type
+    starts with an Aqua prefix (auto_reply_to_*, ESCALATED_*,
+    nepq_initial, nepq_followup_*, aqua_intro), keep the MOST RECENT
+    unsent draft and delete the older unsent ones. Sent drafts are
+    left alone (they already went out — dedup is for the unsent queue).
+
+    Returns (kept_count, deleted_count).
+    """
+    AUTO_PREFIXES = ('auto_reply_to_', 'ESCALATED_', 'nepq_initial',
+                      'nepq_followup_', 'aqua_intro')
+
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('SELECT id, lead_id, message_type, created_at, sent '
+                  'FROM outreach_drafts WHERE sent = 0 ORDER BY id ASC')
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    # Group by (lead_id, message_type-family)
+    def _family(msg_type):
+        # Treat all auto_reply_to_* together (different intents are
+        # still dupes for the same lead — we only want one pending),
+        # same for nepq_followup_*, etc.
+        if not msg_type:
+            return ''
+        for p in AUTO_PREFIXES:
+            if msg_type.startswith(p):
+                return p
+        return msg_type
+
+    groups = {}
+    for r in rows:
+        try:
+            lead_id = r['lead_id'] if isinstance(r, dict) else r[1]
+            msg_type = (r['message_type'] if isinstance(r, dict) else r[2]) or ''
+            draft_id = r['id'] if isinstance(r, dict) else r[0]
+            created = (r['created_at'] if isinstance(r, dict) else r[3]) or ''
+        except Exception:
+            continue
+        fam = _family(msg_type)
+        if not fam:
+            continue
+        key = (lead_id, fam)
+        groups.setdefault(key, []).append((draft_id, created, msg_type))
+
+    deleted_count = 0
+    kept_count = 0
+    for key, items in groups.items():
+        if len(items) < 2:
+            kept_count += 1
+            continue
+        # Sort by created_at descending — newest first wins
+        items.sort(key=lambda x: x[1], reverse=True)
+        kept_count += 1  # the keeper
+        for draft_id, _, _ in items[1:]:
+            if not dry_run:
+                try:
+                    delete_draft(draft_id)
+                except Exception:
+                    continue
+            deleted_count += 1
+    return kept_count, deleted_count
+
+
 def clear_all_scheduled_sends():
     """Clear scheduled_send_at on EVERY pending draft. Used when Aqua
     flips to OFF — countdowns should not be lying about future sends

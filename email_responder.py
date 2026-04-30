@@ -447,6 +447,25 @@ def process_unread_message(msg, auto_send=False, watcher_user=None):
     # call sites below.
     rfc_msg_id = msg.get('message_id', '')
 
+    # HARD DEDUP via DB. The processed_message_ids file lives on
+    # Streamlit Cloud's ephemeral filesystem, so it gets wiped on
+    # every container restart — without this DB-backed check, every
+    # unread email gets re-processed after a restart and a fresh
+    # duplicate draft is generated. Joseph 2026-04-30: '400 drafts
+    # for ~38 customers'. inbound_messages.message_id_rfc is UNIQUE,
+    # so if there's already a row for this Message-ID, we've already
+    # handled this exact email and should skip.
+    if rfc_msg_id:
+        try:
+            if database.has_inbound_with_message_id(rfc_msg_id):
+                log_event('skipped',
+                           f"⏭ Skipping {from_email} — already processed "
+                           f"(message_id seen in DB)",
+                           details={'message_id': rfc_msg_id[:80]})
+                return None
+        except Exception:
+            pass
+
     def _mark_processed():
         if rfc_msg_id:
             try:
