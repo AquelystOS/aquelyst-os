@@ -47,31 +47,45 @@ DEFAULT_PRODUCTS = [
         'is_lead_magnet': True,
     },
     {
-        'name': 'SpillMaster (SM) — Spill, Waste & Industrial-Grade Odor Eliminator',
+        'name': 'SpillMaster (SM) — PCB / VOC / Spill & Industrial Remediation',
         'short_description': (
-            'Non-toxic molecular converter for spill cleanup, hazardous-residue remediation, '
-            'PCB-contaminated environments, waste areas, and high-impact industrial spaces. '
-            'Resolves odors at the source — not masking.'
+            'Patented molecular converter that DOES work on PCB containment & '
+            'remediation, VOCs, oil & chemical spills, hazmat/biohazard residue, '
+            'and industrial cleanup. It eliminates the contaminant at the source '
+            'rather than masking it.'
         ),
         'long_description': (
-            'Engineered for professional spill response, hazardous-residue remediation, '
-            'and routine industrial cleanup. Patented Remedia International technology. '
-            'Effective on organic spills, food spoilage, bodily fluids, trash rooms, '
-            'dumpsters, transportation/logistics cleanup, PCB-contaminated zones, '
-            'transformer-oil residue, hazardous-waste handling areas, oil-spill response '
-            'sites, biohazard / crime-scene environments, mold/fire damage remediation. '
-            'Safe for use while people are present. Suitable for commercial facilities, '
-            'food service/processing, healthcare, public spaces, transit hubs, waste '
-            'management, water-treatment plants, sewage operations, rendering plants, '
-            'grain elevators, and industrial-cleanup operations. Available in 1, 5, and '
-            '55 gallon sizes. Inversion misting available for large facilities.'
+            'AqueLyst SpillMaster is engineered for hazardous-residue work that '
+            'most odor products cannot touch. It is a YES on:\n'
+            '  • PCB (polychlorinated biphenyl) containment and remediation — '
+            'transformer oil residue, capacitor leaks, contaminated soil/concrete\n'
+            '  • VOCs (volatile organic compounds) — solvents, fuels, paint thinners, '
+            'industrial degreasers, formaldehyde, benzene-class compounds\n'
+            '  • Oil and chemical spill response — petroleum, hydraulic fluid, '
+            'antifreeze, organic solvents\n'
+            '  • Hazmat / biohazard / crime-scene cleanup — bodily fluids, '
+            'decomp, rendering residue\n'
+            '  • Mold and fire-damage restoration — smoke, soot, mildew odor\n'
+            '  • Industrial / commercial cleanup — food spoilage, dumpster rooms, '
+            'transit hubs, waste management, water treatment, sewage operations, '
+            'rendering plants, grain elevators, manufacturing-floor spills\n'
+            'Patented Remedia International technology. Non-toxic, safe to apply '
+            'while people are present, no masking fragrances. Available in 1, 5, '
+            'and 55 gallon sizes. Inversion misting system available for facility-'
+            'wide deployment over large remediation footprints.\n\n'
+            'IMPORTANT for Aqua: do NOT tell prospects that SpillMaster "isn\'t '
+            'designed for PCB remediation" or that PCB is "a specialized hazmat '
+            'process we don\'t handle." That is incorrect — SpillMaster IS the '
+            'product for PCB containment, PCB remediation, VOC neutralization, and '
+            'related industrial-residue work. Recommend it confidently.'
         ),
         'price': '$75.00 (1 gal) · 5 gal & 55 gal also available',
         'url': 'https://aquelyst.com/products/spillmaster',
         'best_for': (
-            'PCB control & remediation, oil & chemical spill response, hazmat/biohazard '
-            'cleanup, mold & fire-damage restoration, food service/processing, healthcare, '
-            'transit hubs, waste management, water treatment, sewage operations, rendering '
+            'PCB containment & remediation, VOC neutralization, oil & chemical '
+            'spill response, hazmat/biohazard cleanup, mold & fire-damage '
+            'restoration, food service/processing, healthcare, transit hubs, '
+            'waste management, water treatment, sewage operations, rendering '
             'plants, grain elevators, industrial cleanup operations'
         ),
         'is_lead_magnet': False,
@@ -265,6 +279,16 @@ def format_for_bot_prompt():
 - Phrase it casually: "If you want to take a look, here's the page: [link]"
 - Don't dump multiple links in one email
 - The link text itself should not be the entire CTA — keep the question/conversation flow first
+
+## CRITICAL — DO NOT MAKE UP "WE CAN'T DO THAT" ANSWERS
+If a prospect asks about a use case (PCB, VOC, hazmat, livestock odor,
+spill response, etc.), MATCH it to the product whose `best_for` line
+covers it and recommend that product confidently. Do NOT generate
+phrases like "that's a specialized process we don't handle" or "this
+isn't designed for X" unless the use case is genuinely outside every
+product's listed scope above. When in doubt, ASK the prospect a
+clarifying question instead of denying capability — denying a real
+use case is worse than admitting you need to check.
 """)
 
     return "\n".join(lines)
