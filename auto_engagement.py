@@ -737,35 +737,61 @@ def _resolve_send_as_user(draft, lead):
       3. lead.last_contacted_by  (the human who originally touched the lead)
       4. engagement.state['config']['started_by_user_email']  (whoever
          flipped Aqua to AUTONOMOUS — they own the campaign)
-      5. None  (will surface a clear error in send_email)
+      5. ANY user with SMTP configured (multi-tenant fallback)
+      6. None  (will surface a clear error in send_email)
     Returns lowercase email or None.
     """
-    candidates = []
-    try:
-        candidates.append((draft.get('created_by') or '').lower() if draft else '')
-    except Exception:
-        pass
-    try:
-        candidates.append((draft.get('sent_by') or '').lower() if draft else '')
-    except Exception:
-        pass
-    try:
-        if lead:
-            candidates.append((lead.get('last_contacted_by') or '').lower()
-                              if isinstance(lead, dict)
-                              else (lead['last_contacted_by'] or '').lower()
-                              if 'last_contacted_by' in (lead.keys() if hasattr(lead, 'keys') else [])
-                              else '')
-    except Exception:
-        pass
+    def _safe_get(obj, key):
+        if obj is None:
+            return ''
+        try:
+            if isinstance(obj, dict):
+                return (obj.get(key) or '').lower()
+            # sqlite3.Row / _PgRowDict — bracket access
+            try:
+                v = obj[key]
+                return (v or '').lower() if v else ''
+            except (KeyError, IndexError, TypeError):
+                return ''
+        except Exception:
+            return ''
+
+    candidates = [
+        _safe_get(draft, 'created_by'),
+        _safe_get(draft, 'sent_by'),
+        _safe_get(lead, 'last_contacted_by'),
+    ]
     try:
         cfg = (get_state() or {}).get('config', {}) or {}
         candidates.append((cfg.get('started_by_user_email') or '').lower())
     except Exception:
         pass
+
     for c in candidates:
         if c:
             return c
+
+    # Last-resort fallback: pick ANY user with SMTP configured. Without
+    # this, drafts created BEFORE created_by tracking landed (or before
+    # the user toggled AUTONOMOUS post-fix) have no resolvable owner
+    # and silently fail forever. Better to send-as-someone than to
+    # never send.
+    try:
+        users = database.smtp_list_all() or []
+        if users:
+            # Prefer joseph@aquelyst.com if present (root admin), else first
+            preferred = None
+            for u in users:
+                ue = (u.get('user_email') or '').lower()
+                if ue == 'joseph@aquelyst.com':
+                    preferred = ue
+                    break
+            if not preferred and users:
+                preferred = (users[0].get('user_email') or '').lower() or None
+            if preferred:
+                return preferred
+    except Exception:
+        pass
     return None
 
 
@@ -778,9 +804,20 @@ def drain_pending_auto_drafts(max_per_run=20):
     hallucinations get blocked even on retry) but borderline drafts are
     sent because the human opted into auto-send.
 
-    Returns count sent + count blocked."""
+    Returns count sent + count blocked.
+
+    Records every attempt's outcome to engagement state so the UI can
+    show 'last drain: X sent, Y failed (reason)' in real time. Joseph
+    2026-04-30: 'its still counting down but nothing sa actually
+    sending please evaluate it in live time.' Without this visibility
+    Joseph can't tell when sends fail vs when there's nothing to send.
+    """
     sent_count = 0
     blocked_count = 0
+    failed_count = 0
+    last_failure = None  # keep the most recent failure to surface in UI
+    from datetime import datetime as _dt_now
+    drain_start = _dt_now.utcnow().isoformat()
     try:
         pending = database.get_pending_drafts(limit=200)
     except Exception:
@@ -868,6 +905,9 @@ def drain_pending_auto_drafts(max_per_run=20):
                 in_reply_to=irt,
                 send_as_user=send_as)
         except Exception as e:
+            failed_count += 1
+            last_failure = (f"{lead['business_name']} (as {send_as or 'NO USER'}): "
+                            f"{str(e)[:120]}")
             log_event('error', f"Drain send failed for {lead['business_name']}: {str(e)[:80]}")
             continue
         if success:
@@ -885,10 +925,28 @@ def drain_pending_auto_drafts(max_per_run=20):
                        details={'lead_id': lead_id, 'draft_id': d['id'],
                                 'send_as': send_as})
         else:
+            failed_count += 1
+            last_failure = (f"{lead['business_name']} (as {send_as or 'NO USER'}): "
+                            f"{(send_msg or '')[:140]}")
             log_event('error',
                        f"Drain SMTP failed for {lead['business_name']} "
                        f"(send_as={send_as or 'NONE'}): {(send_msg or '')[:120]}")
         time.sleep(1)
+
+    # Persist the drain outcome so the UI can show it. Crucial for
+    # debugging "countdown hits zero but nothing sent" — the user can
+    # now see the actual reason in the live activity panel.
+    try:
+        update_state(last_drain={
+            'at': drain_start,
+            'sent': sent_count,
+            'blocked': blocked_count,
+            'failed': failed_count,
+            'last_failure': last_failure,
+        })
+    except Exception:
+        pass
+
     return sent_count, blocked_count
 
 

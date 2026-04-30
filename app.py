@@ -5470,6 +5470,55 @@ def _aqua_live_activity_fragment():
             f"engine {last_run_short}<br>inbox {last_check_short}</div></div>"
         )
 
+    # Last drain outcome — surfaced LOUDLY so the user sees if sends
+    # are failing instead of just guessing. Joseph 2026-04-30: "its
+    # still counting down but nothing sa actually sending please
+    # evaluate it in live time."
+    last_drain = (eng_state or {}).get('last_drain')
+    if last_drain:
+        d_sent = last_drain.get('sent', 0)
+        d_failed = last_drain.get('failed', 0)
+        d_at = (last_drain.get('at') or '')[11:19]
+        d_failure = last_drain.get('last_failure') or ''
+        if d_failed > 0:
+            st.html(
+                f"<div style='background:linear-gradient(135deg,#7f1d1d44,#dc262622);"
+                f"border:1px solid #dc2626;border-radius:10px;padding:0.6rem 0.85rem;"
+                f"margin-bottom:0.6rem;font-size:0.78rem;color:#fecaca'>"
+                f"<strong>❌ Last drain @ {d_at}: {d_sent} sent · "
+                f"<span style='color:#fca5a5'>{d_failed} FAILED</span></strong>"
+                + (f"<br><span style='color:#fee2e2;font-size:0.72rem;"
+                    f"font-family:JetBrains Mono,monospace'>{d_failure[:200]}</span>"
+                   if d_failure else "")
+                + "</div>"
+            )
+        elif d_sent > 0:
+            st.html(
+                f"<div style='background:linear-gradient(135deg,#16a34a22,#a3e63522);"
+                f"border:1px solid #16a34a;border-radius:10px;padding:0.4rem 0.85rem;"
+                f"margin-bottom:0.6rem;font-size:0.78rem;color:#bbf7d0'>"
+                f"✅ Last drain @ {d_at}: {d_sent} sent</div>"
+            )
+
+    # Force-fire button — manual trigger so user can test without
+    # waiting for the loop tick.
+    if mode != 'off':
+        force_col1, force_col2 = st.columns([3, 1])
+        if force_col2.button("🔥 Force-fire now",
+                              key="aqua_force_drain",
+                              use_container_width=True,
+                              help="Manually run drain right now to test "
+                                    "auto-send. Useful for diagnosing 'countdown "
+                                    "hits zero but nothing sends' issues."):
+            try:
+                with st.spinner("Draining..."):
+                    s, b = auto_engagement.drain_pending_auto_drafts(max_per_run=10)
+                st.success(f"✅ Drain complete: {s} sent, {b} blocked. "
+                           f"See result above.")
+            except Exception as e:
+                st.error(f"❌ Drain crashed: {str(e)[:200]}")
+            st.rerun()
+
     # Recent autonomous sends — proves Aqua is actually firing emails,
     # not just claiming to. Joseph 2026-04-30: "i should see these in
     # my sent box of joseph@aquelyst and i see nothing." Show the
