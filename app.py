@@ -203,9 +203,17 @@ def _check_password():
                     st.session_state.logged_in_user_email = chosen_email
                     st.session_state.pop('just_created_account', None)
                     database.user_record_login(chosen_email)
+                    # Fresh login = clean slate. Stop any bots that were
+                    # left running from a prior session (e.g. user closed
+                    # the browser without clicking sign out). Joseph's
+                    # rule: every restart requires explicit toggle-on.
+                    try:
+                        _stop_all_autonomy()
+                    except Exception:
+                        pass
                     try:
                         import audit_log as _al
-                        _al.log('login', f"Login: {chosen_email}",
+                        _al.log('login', f"Login: {chosen_email} (bots reset)",
                                  target_type='team_member',
                                  target_label=chosen_email)
                     except Exception:
@@ -2806,6 +2814,17 @@ def show_top_nav():
                 st.rerun()
         if top_right.button("🚪 Sign out", key="signout_btn",
                              use_container_width=True):
+            # Stop ALL autonomous workers on every logout. Joseph's rule
+            # (2026-04-30): "every restart should require explicit
+            # toggle on" — so logouts always leave a clean slate.
+            _stop_all_autonomy()
+            try:
+                import audit_log
+                audit_log.log('logout',
+                              f"Sign out — bots stopped (was: "
+                              f"{st.session_state.get('logged_in_user_email', '?')})")
+            except Exception:
+                pass
             st.session_state.pop('logged_in_user_email', None)
             st.session_state.pop('team_password_ok', None)
             st.rerun()
@@ -9190,13 +9209,9 @@ def setup_data_tab():
     st.markdown("#### 🚪 Save & Logout")
     st.caption("Disconnects email, stops bots, and returns to the welcome screen. Your data stays.")
     if st.button("💾 Save & Logout", type="primary", use_container_width=True):
-        # Stop background bots
+        # Stop ALL background bots (auto-engagement, watcher, autopilot)
+        _stop_all_autonomy()
         try:
-            email_responder.stop_responder()
-        except Exception:
-            pass
-        try:
-            auto_engagement.stop_engagement()
             auto_engagement.update_state(running=False, config={})
         except Exception:
             pass
@@ -9223,6 +9238,26 @@ def setup_data_tab():
 # ===========================================================================
 # HELPERS
 # ===========================================================================
+def _stop_all_autonomy():
+    """Stop every autonomous worker — auto-engagement, inbox watcher,
+    autopilot. Used on logout AND on fresh login so bots never run
+    'invisibly' across sessions. Joseph's rule: every restart requires
+    an explicit toggle-on.
+    """
+    try:
+        auto_engagement.stop_engagement()
+    except Exception:
+        pass
+    try:
+        email_responder.stop_responder()
+    except Exception:
+        pass
+    try:
+        autopilot.stop_autopilot()
+    except Exception:
+        pass
+
+
 def _et_zone():
     """Return America/New_York ZoneInfo for display. Auto-handles DST so
     EST in winter, EDT in summer. Falls back to UTC if zoneinfo missing."""
