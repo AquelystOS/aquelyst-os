@@ -1918,12 +1918,31 @@ def mark_draft_sent(draft_id, sent_by=None):
     conn.close()
 
 def delete_draft(draft_id):
-    """Discard a draft. Used by the Discard buttons on Inbox/Today/Thread."""
+    """Discard a draft. Used by the Discard buttons on Inbox/Today/Thread.
+
+    `inbound_messages.draft_response_id` has a FK to `outreach_drafts.id`
+    (the AI-drafted reply that was suggested for an inbound). Postgres
+    refuses the DELETE while that reference exists, so NULL it out first.
+    `email_tracking_events.draft_id` has no FK constraint, but we still
+    clear it so we don't leave orphan stats pointing at a missing draft.
+    """
     if not draft_id:
         return
     conn = get_connection()
     c = conn.cursor()
     try:
+        # Detach any inbound message that pointed at this draft as its reply
+        try:
+            c.execute('UPDATE inbound_messages SET draft_response_id = NULL '
+                      'WHERE draft_response_id = ?', (draft_id,))
+        except Exception:
+            pass  # column/table may not exist on older deployments
+        # Clear tracking events (no FK, but no point keeping orphans)
+        try:
+            c.execute('DELETE FROM email_tracking_events WHERE draft_id = ?',
+                      (draft_id,))
+        except Exception:
+            pass
         c.execute('DELETE FROM outreach_drafts WHERE id = ?', (draft_id,))
         conn.commit()
     finally:
